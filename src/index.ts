@@ -1,2 +1,4 @@
-// Entry point. Bot setup will be added in the next step.
-console.log('finance-bot: setup OK');
+import { bot } from './bot/bot.js';
+
+bot.start();
+console.log('finance-bot: bot started');
