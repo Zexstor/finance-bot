@@ -1,6 +1,12 @@
 import { supabase } from '../db/client.js';
 import type { TransactionType } from '../types/db.js';
 
+// supabase-js infers to-one embeds as arrays without generated DB types;
+// at runtime PostgREST actually returns a single object (or null) here.
+interface EmbeddedName {
+  name: string;
+}
+
 export async function recordTransaction(
   userId: number,
   type: TransactionType,
@@ -35,7 +41,13 @@ export async function deleteLastTransaction(): Promise<RemovedTransaction | null
     .select('id, type, amount, description, author:users(name)')
     .order('created_at', { ascending: false })
     .limit(1)
-    .maybeSingle();
+    .maybeSingle<{
+      id: number;
+      type: TransactionType;
+      amount: number;
+      description: string | null;
+      author: EmbeddedName | null;
+    }>();
 
   if (error) {
     throw error;
@@ -55,7 +67,7 @@ export async function deleteLastTransaction(): Promise<RemovedTransaction | null
     type: data.type,
     amount: Number(data.amount),
     description: data.description,
-    authorName: data.author?.[0]?.name ?? 'Неизвестно',
+    authorName: data.author?.name ?? 'Неизвестно',
   };
 }
 
@@ -73,7 +85,17 @@ export async function listRecentTransactions(limit: number): Promise<Transaction
     .from('transactions')
     .select('type, amount, description, created_at, author:users(name), category:categories(name)')
     .order('created_at', { ascending: false })
-    .limit(limit);
+    .limit(limit)
+    .returns<
+      {
+        type: TransactionType;
+        amount: number;
+        description: string | null;
+        created_at: string;
+        author: EmbeddedName | null;
+        category: EmbeddedName | null;
+      }[]
+    >();
 
   if (error) {
     throw error;
@@ -84,7 +106,7 @@ export async function listRecentTransactions(limit: number): Promise<Transaction
     amount: Number(row.amount),
     description: row.description,
     created_at: row.created_at,
-    authorName: row.author?.[0]?.name ?? 'Неизвестно',
-    categoryName: row.category?.[0]?.name ?? null,
+    authorName: row.author?.name ?? 'Неизвестно',
+    categoryName: row.category?.name ?? null,
   }));
 }

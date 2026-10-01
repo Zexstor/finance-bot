@@ -1,5 +1,11 @@
 import { supabase } from '../db/client.js';
 
+// supabase-js infers to-one embeds as arrays without generated DB types;
+// at runtime PostgREST actually returns a single object (or null) here.
+interface EmbeddedName {
+  name: string;
+}
+
 export interface CategoryTotal {
   name: string;
   total: number;
@@ -55,7 +61,8 @@ export async function getMonthlyReport(): Promise<MonthlyReport> {
       .select('amount, category:categories(name)')
       .eq('type', 'expense')
       .gte('created_at', start)
-      .lt('created_at', end),
+      .lt('created_at', end)
+      .returns<{ amount: number; category: EmbeddedName | null }[]>(),
     getMonthlyGoal(),
   ]);
 
@@ -70,7 +77,7 @@ export async function getMonthlyReport(): Promise<MonthlyReport> {
 
   const byCategory = new Map<string, number>();
   for (const row of expenseResult.data ?? []) {
-    const name = row.category?.[0]?.name ?? 'Без категории';
+    const name = row.category?.name ?? 'Без категории';
     byCategory.set(name, (byCategory.get(name) ?? 0) + Number(row.amount));
   }
 
