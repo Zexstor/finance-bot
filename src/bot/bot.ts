@@ -2,9 +2,11 @@ import { Bot, InlineKeyboard } from 'grammy';
 import { env } from '../config/env.js';
 import { accessControl } from './access-control.js';
 import { ensureUser } from '../db/users.js';
-import { getCategories } from '../db/categories.js';
+import { getCategories, addCategory, deleteCategory } from '../db/categories.js';
 import { classifyTransaction } from '../ai/classify-transaction.js';
 import { setPending, takePending } from './pending-clarifications.js';
+import { setPendingCategoryType, takePendingCategoryType } from './pending-category-input.js';
+import type { Category, TransactionType } from '../types/db.js';
 import {
   recordTransaction,
   listRecentTransactions,
@@ -121,10 +123,55 @@ bot.command('undo', async (ctx) => {
   );
 });
 
+bot.command('categories', async (ctx) => {
+  let categories: Category[];
+
+  try {
+    categories = await getCategories();
+  } catch (error) {
+    console.error('Failed to load categories:', error);
+    await ctx.reply('Не получилось получить категории, попробуй ещё раз.');
+    return;
+  }
+
+  await ctx.reply('Категории. Нажми на категорию, чтобы удалить её, или добавь новую:', {
+    reply_markup: buildCategoriesKeyboard(categories),
+  });
+});
+
 bot.on('message:text', async (ctx) => {
   const text = ctx.message.text;
 
   if (text.startsWith('/')) {
+    return;
+  }
+
+  const pendingCategoryType = takePendingCategoryType(ctx.from.id);
+
+  if (pendingCategoryType) {
+    const name = text.trim().slice(0, 40);
+
+    if (!name) {
+      await ctx.reply('Название не может быть пустым. Набери /categories и попробуй ещё раз.');
+      return;
+    }
+
+    let result;
+    try {
+      result = await addCategory(name, pendingCategoryType);
+    } catch (error) {
+      console.error('Failed to add category:', error);
+      await ctx.reply('Не получилось сохранить категорию, попробуй ещё раз.');
+      return;
+    }
+
+    if (!result.ok) {
+      await ctx.reply('Такая категория уже есть.');
+      return;
+    }
+
+    const typeLabel = pendingCategoryType === 'income' ? 'доходная' : 'расходная';
+    await ctx.reply(`✅ Добавлена ${typeLabel} категория «${result.category.name}».`);
     return;
   }
 
@@ -201,6 +248,49 @@ bot.on('message:text', async (ctx) => {
 
 bot.on('callback_query:data', async (ctx) => {
   const data = ctx.callbackQuery.data;
+
+  if (data === 'noop') {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+
+  if (data.startsWith('delcat:')) {
+    const id = Number(data.replace('delcat:', ''));
+
+    let result;
+    try {
+      result = await deleteCategory(id);
+    } catch (error) {
+      console.error('Failed to delete category:', error);
+      await ctx.answerCallbackQuery({ text: 'Не получилось удалить.' });
+      return;
+    }
+
+    if (!result.ok) {
+      await ctx.answerCallbackQuery({ text: 'Нельзя удалить — используется в операциях.', show_alert: true });
+      return;
+    }
+
+    await ctx.answerCallbackQuery({ text: 'Удалено' });
+
+    try {
+      const categories = await getCategories();
+      await ctx.editMessageReplyMarkup({ reply_markup: buildCategoriesKeyboard(categories) });
+    } catch (error) {
+      console.error('Failed to refresh categories keyboard:', error);
+    }
+    return;
+  }
+
+  if (data.startsWith('addcat:')) {
+    const type = data.replace('addcat:', '') as TransactionType;
+    setPendingCategoryType(ctx.from.id, type);
+    await ctx.answerCallbackQuery();
+    const typeLabel = type === 'income' ? 'доходной' : 'расходной';
+    await ctx.reply(`Напиши название новой ${typeLabel} категории:`);
+    return;
+  }
+
   const pendingEntry = takePending(ctx.from.id);
 
   if (!pendingEntry) {
@@ -241,6 +331,26 @@ bot.on('callback_query:data', async (ctx) => {
     `${icon} ${label}: ${pendingEntry.amount.toFixed(2)} € — ${categoryName} (${pendingEntry.note || 'без заметки'})`,
   );
 });
+
+function buildCategoriesKeyboard(categories: Category[]): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  const expense = categories.filter((c) => c.type === 'expense');
+  const income = categories.filter((c) => c.type === 'income');
+
+  keyboard.text('— Расходы —', 'noop').row();
+  for (const category of expense) {
+    keyboard.text(`🗑 ${category.name}`, `delcat:${category.id}`).row();
+  }
+  keyboard.text('➕ Добавить расходную', 'addcat:expense').row();
+
+  keyboard.text('— Доходы —', 'noop').row();
+  for (const category of income) {
+    keyboard.text(`🗑 ${category.name}`, `delcat:${category.id}`).row();
+  }
+  keyboard.text('➕ Добавить доходную', 'addcat:income');
+
+  return keyboard;
+}
 
 function formatTransactionLine(t: TransactionListItem): string {
   const date = new Date(t.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
