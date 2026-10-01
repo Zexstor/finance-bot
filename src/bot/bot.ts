@@ -4,6 +4,7 @@ import { accessControl } from './access-control.js';
 import { ensureUser } from '../db/users.js';
 import { parseTransactionText } from '../services/parse-transaction.js';
 import { recordTransaction, listRecentTransactions, type TransactionListItem } from '../services/transactions.js';
+import { getMonthlyReport, setMonthlyGoal, type MonthlyReport } from '../services/report.js';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 
@@ -35,6 +36,59 @@ bot.command('list', async (ctx) => {
 
   const lines = transactions.map(formatTransactionLine);
   await ctx.reply(['Последние записи:', ...lines].join('\n'));
+});
+
+bot.command('report', async (ctx) => {
+  let report: MonthlyReport;
+
+  try {
+    report = await getMonthlyReport();
+  } catch (error) {
+    console.error('Failed to build report:', error);
+    await ctx.reply('Не получилось построить отчёт, попробуй ещё раз.');
+    return;
+  }
+
+  const lines = [`📊 Отчёт за ${report.monthLabel}`, ''];
+
+  if (report.goal > 0) {
+    const percent = Math.round((report.income / report.goal) * 100);
+    lines.push(`Доход: ${report.income.toFixed(2)} € из цели ${report.goal.toFixed(2)} € (${percent}%)`);
+  } else {
+    lines.push(`Доход: ${report.income.toFixed(2)} € (цель не задана — /setgoal сумма)`);
+  }
+
+  lines.push('', 'Расходы по категориям:');
+
+  if (report.expensesByCategory.length === 0) {
+    lines.push('пока нет расходов за этот месяц');
+  } else {
+    for (const category of report.expensesByCategory) {
+      lines.push(`➖ ${category.name}: ${category.total.toFixed(2)} €`);
+    }
+    lines.push(`Итого расходов: ${report.totalExpenses.toFixed(2)} €`);
+  }
+
+  await ctx.reply(lines.join('\n'));
+});
+
+bot.command('setgoal', async (ctx) => {
+  const amount = Number(ctx.match.trim().replace(',', '.'));
+
+  if (!ctx.match.trim() || !Number.isFinite(amount) || amount <= 0) {
+    await ctx.reply('Укажи сумму цели, например: /setgoal 2000');
+    return;
+  }
+
+  try {
+    await setMonthlyGoal(amount);
+  } catch (error) {
+    console.error('Failed to set monthly goal:', error);
+    await ctx.reply('Не получилось сохранить цель, попробуй ещё раз.');
+    return;
+  }
+
+  await ctx.reply(`✅ Цель на месяц: ${amount.toFixed(2)} €`);
 });
 
 bot.on('message:text', async (ctx) => {
