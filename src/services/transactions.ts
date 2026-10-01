@@ -6,6 +6,7 @@ export async function recordTransaction(
   type: TransactionType,
   amount: number,
   note: string,
+  categoryId: number | null,
 ): Promise<void> {
   const { error } = await supabase.from('transactions').insert({
     user_id: userId,
@@ -13,11 +14,49 @@ export async function recordTransaction(
     amount,
     description: note || null,
     source: 'text',
+    category_id: categoryId,
   });
 
   if (error) {
     throw error;
   }
+}
+
+export interface RemovedTransaction {
+  type: TransactionType;
+  amount: number;
+  description: string | null;
+  authorName: string;
+}
+
+export async function deleteLastTransaction(): Promise<RemovedTransaction | null> {
+  const { data, error } = await supabase
+    .from('transactions')
+    .select('id, type, amount, description, author:users(name)')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data) {
+    return null;
+  }
+
+  const { error: deleteError } = await supabase.from('transactions').delete().eq('id', data.id);
+
+  if (deleteError) {
+    throw deleteError;
+  }
+
+  return {
+    type: data.type,
+    amount: Number(data.amount),
+    description: data.description,
+    authorName: data.author?.[0]?.name ?? 'Неизвестно',
+  };
 }
 
 export interface TransactionListItem {
