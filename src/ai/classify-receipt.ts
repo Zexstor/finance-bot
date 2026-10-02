@@ -2,18 +2,7 @@ import { z } from 'zod';
 import { openai } from './client.js';
 import { env } from '../config/env.js';
 import type { Category } from '../types/db.js';
-
-const receiptItemSchema = z.object({
-  name: z.string(),
-  amount: z.number().positive(),
-  category: z.string().nullable(),
-});
-
-const receiptSchema = z.object({
-  store: z.string().nullable(),
-  total: z.number().nullable(),
-  items: z.array(receiptItemSchema),
-});
+import { receiptSchema, normalizeTranscript } from './receipt-logic.js';
 
 export type ReceiptClassification = z.infer<typeof receiptSchema> & { lowConfidence: boolean };
 
@@ -121,13 +110,6 @@ function buildClassificationPrompt(expenseCategories: Category[]): string {
 
 Категории расходов:
 ${expenseNames}.`;
-}
-
-function normalizeTranscript(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-zа-я0-9]+/gi, ' ')
-    .trim();
 }
 
 export async function classifyReceipt(

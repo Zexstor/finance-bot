@@ -21,6 +21,8 @@ import {
   type TransactionListItem,
 } from '../services/transactions.js';
 import { getMonthlyReport, setMonthlyGoal, type MonthlyReport } from '../services/report.js';
+import { isSumMismatched } from '../ai/receipt-logic.js';
+import { truncateForTelegram } from './format.js';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 
@@ -282,7 +284,7 @@ bot.on('message:photo', async (ctx) => {
   }
   lines.push('', `Сумма позиций: ${itemsSum.toFixed(2)} €`);
 
-  const sumMismatch = parsed.total !== null && Math.abs(itemsSum - parsed.total) > 0.05;
+  const sumMismatch = isSumMismatched(itemsSum, parsed.total);
   if (sumMismatch) {
     lines.push(
       '',
@@ -610,17 +612,12 @@ function buildCategoriesKeyboard(categories: Category[]): InlineKeyboard {
   return keyboard;
 }
 
-const TELEGRAM_MESSAGE_LIMIT = 4000;
-
 async function replyText(
   ctx: Context,
   text: string,
   extra?: Parameters<Context['reply']>[1],
 ): Promise<void> {
-  const safeText =
-    text.length > TELEGRAM_MESSAGE_LIMIT
-      ? `${text.slice(0, TELEGRAM_MESSAGE_LIMIT)}\n\n(сообщение обрезано, оно получилось слишком длинным)`
-      : text;
+  const safeText = truncateForTelegram(text);
 
   try {
     await ctx.reply(safeText, extra);

@@ -2,18 +2,7 @@ import { z } from 'zod';
 import { openai } from './client.js';
 import { env } from '../config/env.js';
 import type { Category } from '../types/db.js';
-
-const transactionItemSchema = z.object({
-  type: z.enum(['expense', 'income']),
-  amount: z.number().positive(),
-  currency: z.string(),
-  category: z.string().nullable(),
-  note: z.string(),
-});
-
-const classificationSchema = z.object({
-  transactions: z.array(transactionItemSchema),
-});
+import { classificationSchema, transactionItemSchema } from './transaction-logic.js';
 
 export type TransactionItem = z.infer<typeof transactionItemSchema>;
 
