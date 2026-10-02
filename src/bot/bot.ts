@@ -23,6 +23,7 @@ import {
 import { getMonthlyReport, setMonthlyGoal, type MonthlyReport } from '../services/report.js';
 import { isSumMismatched } from '../ai/receipt-logic.js';
 import { truncateForTelegram } from './format.js';
+import { appendTransactionRow } from '../integrations/google-sheets.js';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 
@@ -395,6 +396,16 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
       return;
     }
 
+    void appendTransactionRow({
+      type: result.type,
+      amount: result.amount,
+      categoryName: matchedCategory.name,
+      note: result.note,
+      authorName: ctx.from.first_name,
+      source,
+      createdAt: new Date().toISOString(),
+    });
+
     const icon = result.type === 'income' ? '➕' : '➖';
     const label = result.type === 'income' ? 'Доход' : 'Расход';
     await ctx.reply(
@@ -520,6 +531,19 @@ bot.on('callback_query:data', async (ctx) => {
       return;
     }
 
+    const receiptCreatedAt = new Date().toISOString();
+    for (const item of pendingReceipt.items) {
+      void appendTransactionRow({
+        type: 'expense',
+        amount: item.amount,
+        categoryName: item.categoryName,
+        note: item.name,
+        authorName: ctx.from.first_name,
+        source: 'photo',
+        createdAt: receiptCreatedAt,
+      });
+    }
+
     await ctx.answerCallbackQuery({ text: 'Сохранено' });
     await ctx.editMessageText('✅ Чек сохранён.');
     return;
@@ -548,6 +572,19 @@ bot.on('callback_query:data', async (ctx) => {
       console.error('Failed to save batch:', error);
       await ctx.answerCallbackQuery({ text: 'Не получилось сохранить.' });
       return;
+    }
+
+    const batchCreatedAt = new Date().toISOString();
+    for (const item of batch.items) {
+      void appendTransactionRow({
+        type: item.type,
+        amount: item.amount,
+        categoryName: item.categoryName,
+        note: item.note,
+        authorName: ctx.from.first_name,
+        source: batch.source,
+        createdAt: batchCreatedAt,
+      });
     }
 
     await ctx.answerCallbackQuery({ text: 'Сохранено' });
@@ -594,6 +631,16 @@ bot.on('callback_query:data', async (ctx) => {
     await ctx.answerCallbackQuery({ text: 'Не получилось сохранить.' });
     return;
   }
+
+  void appendTransactionRow({
+    type: pendingEntry.type,
+    amount: pendingEntry.amount,
+    categoryName,
+    note: pendingEntry.note,
+    authorName: ctx.from.first_name,
+    source: pendingEntry.source,
+    createdAt: new Date().toISOString(),
+  });
 
   await ctx.answerCallbackQuery();
   const icon = pendingEntry.type === 'income' ? '➕' : '➖';

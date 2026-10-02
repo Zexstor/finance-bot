@@ -22,6 +22,12 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().min(1, 'OPENAI_API_KEY is required'),
   OPENAI_MODEL: z.string().min(1).default('gpt-4o-mini'),
   OPENAI_RECEIPT_MODEL: z.string().min(1).default('gpt-4o'),
+
+  // Optional: Google Sheets live sync. If any of these three are missing,
+  // the sync is silently skipped — the bot works fully without it.
+  GOOGLE_SERVICE_ACCOUNT_EMAIL: z.string().min(1).optional(),
+  GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: z.string().min(1).optional(),
+  GOOGLE_SHEET_ID: z.string().min(1).optional(),
 });
 
 export const env = envSchema.parse(process.env);
