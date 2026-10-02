@@ -1,44 +1,47 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatSheetRow } from './sheet-row.js';
+import { columnsFor, toSheetsSerial, buildTemplateRowValues, EXPENSE_COLUMNS, INCOME_COLUMNS } from './sheet-row.js';
 
-const BASE = {
-  type: 'expense' as const,
-  amount: 3.5,
-  categoryName: 'Кафе и рестораны',
-  note: 'кофе',
-  authorName: 'Pavel',
-  source: 'text' as const,
-  createdAt: '2026-10-05T09:00:00.000Z',
-};
-
-test('formatSheetRow: expense maps to Russian labels', () => {
-  const row = formatSheetRow(BASE);
-  assert.equal(row.Type, 'Расход');
-  assert.equal(row.Amount, 3.5);
-  assert.equal(row.Category, 'Кафе и рестораны');
-  assert.equal(row.Note, 'кофе');
-  assert.equal(row.Author, 'Pavel');
-  assert.equal(row.Source, 'текст');
+test('columnsFor: expense uses the left-hand block', () => {
+  assert.deepEqual(columnsFor('expense'), EXPENSE_COLUMNS);
 });
 
-test('formatSheetRow: income maps to "Доход"', () => {
-  const row = formatSheetRow({ ...BASE, type: 'income' });
-  assert.equal(row.Type, 'Доход');
+test('columnsFor: income uses the right-hand block', () => {
+  assert.deepEqual(columnsFor('income'), INCOME_COLUMNS);
 });
 
-test('formatSheetRow: missing category falls back to "Без категории"', () => {
-  const row = formatSheetRow({ ...BASE, categoryName: null });
-  assert.equal(row.Category, 'Без категории');
+test('expense and income blocks never overlap in columns', () => {
+  const expenseCols = Object.values(EXPENSE_COLUMNS);
+  const incomeCols = Object.values(INCOME_COLUMNS);
+  for (const c of expenseCols) {
+    assert.ok(!incomeCols.includes(c), `column ${c} used by both blocks`);
+  }
 });
 
-test('formatSheetRow: empty note becomes an empty string, not null/undefined', () => {
-  const row = formatSheetRow({ ...BASE, note: '' });
-  assert.equal(row.Note, '');
-  assert.notEqual(row.Note, null);
+test('toSheetsSerial: matches a known Google Sheets date serial', () => {
+  // Verified empirically against the user's real template: 01.10.2026 -> 46296
+  assert.equal(toSheetsSerial(new Date(Date.UTC(2026, 9, 1))), 46296);
 });
 
-test('formatSheetRow: voice and photo sources get Russian labels', () => {
-  assert.equal(formatSheetRow({ ...BASE, source: 'voice' }).Source, 'голос');
-  assert.equal(formatSheetRow({ ...BASE, source: 'photo' }).Source, 'фото чека');
+test('toSheetsSerial: one calendar day apart is exactly 1 apart', () => {
+  const a = toSheetsSerial(new Date(Date.UTC(2026, 9, 1)));
+  const b = toSheetsSerial(new Date(Date.UTC(2026, 9, 2)));
+  assert.equal(b - a, 1);
+});
+
+test('buildTemplateRowValues: missing category falls back to "Без категории"', () => {
+  const values = buildTemplateRowValues({ type: 'expense', amount: 3.5, categoryName: null, note: 'кофе' });
+  assert.equal(values.category, 'Без категории');
+});
+
+test('buildTemplateRowValues: empty/missing note becomes an empty string', () => {
+  const values = buildTemplateRowValues({ type: 'expense', amount: 3.5, categoryName: 'Кафе', note: null });
+  assert.equal(values.description, '');
+});
+
+test('buildTemplateRowValues: passes amount and category through unchanged', () => {
+  const values = buildTemplateRowValues({ type: 'income', amount: 1500, categoryName: 'Зарплата', note: 'зарплата' });
+  assert.equal(values.amount, 1500);
+  assert.equal(values.category, 'Зарплата');
+  assert.equal(values.description, 'зарплата');
 });

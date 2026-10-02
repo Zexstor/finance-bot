@@ -1,32 +1,49 @@
-import type { TransactionType, TransactionSource } from '../types/db.js';
+import type { TransactionType } from '../types/db.js';
 
-// Pure row-formatting logic, kept separate from the actual Google API call
-// so it can be unit-tested without credentials or network access.
+// Pure logic for writing into the user's existing Google Sheets budget
+// template (the "Транзакции" tab: two side-by-side blocks sharing one
+// layout — expenses on the left, income on the right). Kept separate from
+// the actual Google API calls so it's unit-tested without credentials or
+// network access.
 
-export interface SheetRowInput {
+export interface TemplateColumns {
+  date: number;
+  amount: number;
+  description: number;
+  category: number;
+}
+
+// 0-indexed column numbers within the "Транзакции" sheet.
+export const EXPENSE_COLUMNS: TemplateColumns = { date: 1, amount: 2, description: 3, category: 4 };
+export const INCOME_COLUMNS: TemplateColumns = { date: 6, amount: 7, description: 8, category: 9 };
+
+export function columnsFor(type: TransactionType): TemplateColumns {
+  return type === 'income' ? INCOME_COLUMNS : EXPENSE_COLUMNS;
+}
+
+const SHEETS_EPOCH_MS = Date.UTC(1899, 11, 30);
+
+export function toSheetsSerial(date: Date): number {
+  return Math.floor((date.getTime() - SHEETS_EPOCH_MS) / 86_400_000);
+}
+
+export interface TemplateRowInput {
   type: TransactionType;
   amount: number;
   categoryName: string | null;
   note: string | null;
-  authorName: string;
-  source: TransactionSource;
-  createdAt: string;
 }
 
-const SOURCE_LABELS: Record<TransactionSource, string> = {
-  text: 'текст',
-  voice: 'голос',
-  photo: 'фото чека',
-};
+export interface TemplateRowValues {
+  amount: number;
+  description: string;
+  category: string;
+}
 
-export function formatSheetRow(row: SheetRowInput): Record<string, string | number> {
+export function buildTemplateRowValues(row: TemplateRowInput): TemplateRowValues {
   return {
-    Date: new Date(row.createdAt).toLocaleString('ru-RU', { timeZone: 'Europe/Podgorica' }),
-    Type: row.type === 'income' ? 'Доход' : 'Расход',
-    Amount: row.amount,
-    Category: row.categoryName ?? 'Без категории',
-    Note: row.note || '',
-    Author: row.authorName,
-    Source: SOURCE_LABELS[row.source],
+    amount: row.amount,
+    description: row.note || '',
+    category: row.categoryName ?? 'Без категории',
   };
 }
