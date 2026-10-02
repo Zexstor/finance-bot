@@ -72,6 +72,13 @@ bot.command('report', async (ctx) => {
   if (report.goal > 0) {
     const percent = Math.round((report.income / report.goal) * 100);
     lines.push(`Доход: ${report.income.toFixed(2)} € из цели ${report.goal.toFixed(2)} € (${percent}%)`);
+
+    const remaining = report.goal - report.income;
+    if (remaining > 0) {
+      lines.push(`До цели не хватает: ${remaining.toFixed(2)} €`);
+    } else {
+      lines.push(`Цель перевыполнена на: ${Math.abs(remaining).toFixed(2)} €`);
+    }
   } else {
     lines.push(`Доход: ${report.income.toFixed(2)} € (цель не задана — /setgoal сумма)`);
   }
@@ -86,6 +93,10 @@ bot.command('report', async (ctx) => {
     }
     lines.push(`Итого расходов: ${report.totalExpenses.toFixed(2)} €`);
   }
+
+  const balance = report.income - report.totalExpenses;
+  const balanceLabel = balance >= 0 ? 'Остаток' : 'Перерасход';
+  lines.push('', `${balanceLabel}: ${balance.toFixed(2)} €`);
 
   await replyText(ctx, lines.join('\n'));
 });

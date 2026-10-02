@@ -1,5 +1,6 @@
 import { bot } from './bot/bot.js';
 import { startReceiptCleanupJob } from './jobs/expire-receipts.js';
+import { startWeeklyReportJob } from './jobs/weekly-report.js';
 
 await bot.api.setMyCommands([
   { command: 'start', description: 'Запустить бота' },
@@ -11,5 +12,6 @@ await bot.api.setMyCommands([
 ]);
 
 startReceiptCleanupJob();
+startWeeklyReportJob();
 bot.start();
 console.log('finance-bot: bot started');

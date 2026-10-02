@@ -51,6 +51,70 @@ export async function setMonthlyGoal(amount: number): Promise<void> {
   }
 }
 
+function getWeekRange(date = new Date()) {
+  const day = date.getDay(); // 0 = Sunday, 1 = Monday, ...
+  const diffToMonday = day === 0 ? 6 : day - 1;
+
+  const monday = new Date(date);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(monday.getDate() - diffToMonday);
+
+  const nextMonday = new Date(monday);
+  nextMonday.setDate(monday.getDate() + 7);
+
+  return { start: monday.toISOString(), end: nextMonday.toISOString() };
+}
+
+export interface WeeklyReport {
+  income: number;
+  totalExpenses: number;
+  balance: number;
+  expensesByCategory: CategoryTotal[];
+}
+
+export async function getWeeklyReport(): Promise<WeeklyReport> {
+  const { start, end } = getWeekRange();
+
+  const [incomeResult, expenseResult] = await Promise.all([
+    supabase
+      .from('transactions')
+      .select('amount')
+      .eq('type', 'income')
+      .gte('created_at', start)
+      .lt('created_at', end),
+    supabase
+      .from('transactions')
+      .select('amount, category:categories(name)')
+      .eq('type', 'expense')
+      .gte('created_at', start)
+      .lt('created_at', end)
+      .returns<{ amount: number; category: EmbeddedName | null }[]>(),
+  ]);
+
+  if (incomeResult.error) {
+    throw incomeResult.error;
+  }
+  if (expenseResult.error) {
+    throw expenseResult.error;
+  }
+
+  const income = (incomeResult.data ?? []).reduce((sum, row) => sum + Number(row.amount), 0);
+
+  const byCategory = new Map<string, number>();
+  for (const row of expenseResult.data ?? []) {
+    const name = row.category?.name ?? 'Без категории';
+    byCategory.set(name, (byCategory.get(name) ?? 0) + Number(row.amount));
+  }
+
+  const expensesByCategory = [...byCategory.entries()]
+    .map(([name, total]) => ({ name, total }))
+    .sort((a, b) => b.total - a.total);
+
+  const totalExpenses = expensesByCategory.reduce((sum, c) => sum + c.total, 0);
+
+  return { income, totalExpenses, balance: income - totalExpenses, expensesByCategory };
+}
+
 export async function getMonthlyReport(): Promise<MonthlyReport> {
   const { start, end, label } = getMonthRange();
 
