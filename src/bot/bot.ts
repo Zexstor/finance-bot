@@ -531,7 +531,11 @@ bot.on('callback_query:data', async (ctx) => {
 
     const receiptCreatedAt = new Date().toISOString();
     for (const item of pendingReceipt.items) {
-      void appendTransactionRow({
+      // Awaited sequentially, not fired concurrently: each call reads the
+      // sheet to find the first empty row, then writes it. Firing these in
+      // parallel let multiple items race to the same "empty" row, so only
+      // the last write to land actually stuck -- the rest silently vanished.
+      await appendTransactionRow({
         type: 'expense',
         amount: item.amount,
         categoryName: item.categoryName,
@@ -572,7 +576,9 @@ bot.on('callback_query:data', async (ctx) => {
 
     const batchCreatedAt = new Date().toISOString();
     for (const item of batch.items) {
-      void appendTransactionRow({
+      // See the matching comment in the receipt branch above: must be
+      // awaited sequentially, not fired concurrently.
+      await appendTransactionRow({
         type: item.type,
         amount: item.amount,
         categoryName: item.categoryName,
