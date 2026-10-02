@@ -6,8 +6,10 @@ const allowedUserIds = new Set(env.ALLOWED_USER_IDS);
 export async function accessControl(ctx: Context, next: NextFunction) {
   const userId = ctx.from?.id;
 
-  if (userId === undefined || !allowedUserIds.has(userId)) {
-    await ctx.reply('Доступ к этому боту ограничен.');
+  // Silently ignore unauthorized senders and non-private chats instead of
+  // replying — the bot's own username is public, so replying to everyone
+  // who messages it is a free spam/cost vector with no benefit.
+  if (userId === undefined || !allowedUserIds.has(userId) || ctx.chat?.type !== 'private') {
     return;
   }
 

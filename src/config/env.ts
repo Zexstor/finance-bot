@@ -8,10 +8,16 @@ const envSchema = z.object({
   ALLOWED_USER_IDS: z
     .string()
     .min(1, 'ALLOWED_USER_IDS is required')
-    .transform((value) => value.split(',').map((id) => Number(id.trim())))
+    .transform((value) =>
+      value
+        .split(',')
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0)
+        .map(Number),
+    )
     .refine(
-      (ids) => ids.every((id) => Number.isInteger(id)),
-      'ALLOWED_USER_IDS must be a comma-separated list of Telegram user IDs',
+      (ids) => ids.length > 0 && ids.every((id) => Number.isInteger(id) && id > 0),
+      'ALLOWED_USER_IDS must be a comma-separated list of positive Telegram user IDs',
     ),
   OPENAI_API_KEY: z.string().min(1, 'OPENAI_API_KEY is required'),
   OPENAI_MODEL: z.string().min(1).default('gpt-4o-mini'),
