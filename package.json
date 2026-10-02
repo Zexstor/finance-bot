@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "A family Telegram bot for tracking personal finances. Built as a portfolio project to demonstrate AI automation skills.",
   "main": "dist/index.js",
+  "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",

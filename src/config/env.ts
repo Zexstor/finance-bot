@@ -15,6 +15,7 @@ const envSchema = z.object({
     ),
   OPENAI_API_KEY: z.string().min(1, 'OPENAI_API_KEY is required'),
   OPENAI_MODEL: z.string().min(1).default('gpt-4o-mini'),
+  OPENAI_RECEIPT_MODEL: z.string().min(1).default('gpt-4o'),
 });
 
 export const env = envSchema.parse(process.env);

@@ -46,6 +46,10 @@ export async function saveReceipt(
   const { error: itemsError } = await supabase.from('transactions').insert(rows);
 
   if (itemsError) {
+    // Best-effort cleanup: supabase-js has no cross-table transaction, so
+    // without this a failed items insert would leave an orphaned receipt
+    // row (and its already-uploaded photo) with no line items attached.
+    await supabase.from('receipts').delete().eq('id', receipt.id);
     throw itemsError;
   }
 }

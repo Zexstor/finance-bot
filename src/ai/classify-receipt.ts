@@ -17,16 +17,15 @@ const receiptSchema = z.object({
 
 export type ReceiptClassification = z.infer<typeof receiptSchema> & { lowConfidence: boolean };
 
-// Receipt photos often have small, angled, low-contrast text where gpt-4o-mini
-// misreads digits; the full gpt-4o model reads them far more reliably. The
-// cheaper OPENAI_MODEL is still used for the text-only classification step below.
-const RECEIPT_VISION_MODEL = 'gpt-4o';
-
 async function transcribeReceiptText(imageBuffer: Buffer): Promise<string> {
   const base64Image = imageBuffer.toString('base64');
 
+  // Receipt photos often have small, angled, low-contrast text where
+  // gpt-4o-mini misreads digits; OPENAI_RECEIPT_MODEL defaults to the full
+  // gpt-4o, which reads them far more reliably. The cheaper OPENAI_MODEL is
+  // still used for the text-only classification step below.
   const completion = await openai.chat.completions.create({
-    model: RECEIPT_VISION_MODEL,
+    model: env.OPENAI_RECEIPT_MODEL,
     temperature: 0,
     messages: [
       {

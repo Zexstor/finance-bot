@@ -11,7 +11,7 @@ import { setPending, takePending } from './pending-clarifications.js';
 import { setPendingCategoryType, takePendingCategoryType } from './pending-category-input.js';
 import { setPendingReceipt, takePendingReceipt } from './pending-receipts.js';
 import { setPendingBatch, takePendingBatch } from './pending-batch.js';
-import { uploadReceiptImage } from '../db/storage.js';
+import { uploadReceiptImage, deleteReceiptImage } from '../db/storage.js';
 import { saveReceipt } from '../db/receipts.js';
 import type { Category, TransactionType, TransactionSource } from '../types/db.js';
 import {
@@ -51,7 +51,7 @@ bot.command('list', async (ctx) => {
   }
 
   const lines = transactions.map(formatTransactionLine);
-  await ctx.reply(['Последние записи:', ...lines].join('\n'));
+  await replyText(ctx, ['Последние записи:', ...lines].join('\n'));
 });
 
 bot.command('report', async (ctx) => {
@@ -85,7 +85,7 @@ bot.command('report', async (ctx) => {
     lines.push(`Итого расходов: ${report.totalExpenses.toFixed(2)} €`);
   }
 
-  await ctx.reply(lines.join('\n'));
+  await replyText(ctx, lines.join('\n'));
 });
 
 bot.command('setgoal', async (ctx) => {
@@ -209,7 +209,13 @@ bot.on('message:voice', async (ctx) => {
 });
 
 bot.on('message:photo', async (ctx) => {
-  await ensureUser(ctx.from.id, ctx.from.first_name);
+  try {
+    await ensureUser(ctx.from.id, ctx.from.first_name);
+  } catch (error) {
+    console.error('Failed to ensure user:', error);
+    await ctx.reply('Не получилось обработать сообщение, попробуй ещё раз.');
+    return;
+  }
 
   const photos = ctx.message.photo;
   const largestPhoto = photos[photos.length - 1];
@@ -293,7 +299,7 @@ bot.on('message:photo', async (ctx) => {
 
   const keyboard = new InlineKeyboard().text('✅ Сохранить', 'receipt:confirm').row().text('❌ Отмена', 'receipt:cancel');
 
-  await ctx.reply(lines.join('\n'), { reply_markup: keyboard });
+  await replyText(ctx, lines.join('\n'), { reply_markup: keyboard });
 });
 
 async function handleTransactionText(ctx: Context, text: string, source: TransactionSource): Promise<void> {
@@ -301,7 +307,13 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
     return;
   }
 
-  await ensureUser(ctx.from.id, ctx.from.first_name);
+  try {
+    await ensureUser(ctx.from.id, ctx.from.first_name);
+  } catch (error) {
+    console.error('Failed to ensure user:', error);
+    await ctx.reply('Не получилось обработать сообщение, попробуй ещё раз.');
+    return;
+  }
 
   let categories;
   try {
@@ -401,7 +413,7 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
   lines.push('', 'Сохранить всё?');
 
   const keyboard = new InlineKeyboard().text('✅ Сохранить всё', 'batch:confirm').row().text('❌ Отмена', 'batch:cancel');
-  await ctx.reply(lines.join('\n'), { reply_markup: keyboard });
+  await replyText(ctx, lines.join('\n'), { reply_markup: keyboard });
 }
 
 bot.on('callback_query:data', async (ctx) => {
@@ -468,6 +480,13 @@ bot.on('callback_query:data', async (ctx) => {
 
     try {
       await uploadReceiptImage(imagePath, pendingReceipt.imageBuffer);
+    } catch (error) {
+      console.error('Failed to upload receipt image:', error);
+      await ctx.answerCallbackQuery({ text: 'Не получилось сохранить чек.' });
+      return;
+    }
+
+    try {
       await saveReceipt(
         ctx.from.id,
         pendingReceipt.storeName,
@@ -481,6 +500,9 @@ bot.on('callback_query:data', async (ctx) => {
       );
     } catch (error) {
       console.error('Failed to save receipt:', error);
+      await deleteReceiptImage(imagePath).catch((cleanupError) => {
+        console.error('Failed to clean up orphaned receipt image:', cleanupError);
+      });
       await ctx.answerCallbackQuery({ text: 'Не получилось сохранить чек.' });
       return;
     }
@@ -586,6 +608,25 @@ function buildCategoriesKeyboard(categories: Category[]): InlineKeyboard {
   keyboard.text('➕ Добавить доходную', 'addcat:income');
 
   return keyboard;
+}
+
+const TELEGRAM_MESSAGE_LIMIT = 4000;
+
+async function replyText(
+  ctx: Context,
+  text: string,
+  extra?: Parameters<Context['reply']>[1],
+): Promise<void> {
+  const safeText =
+    text.length > TELEGRAM_MESSAGE_LIMIT
+      ? `${text.slice(0, TELEGRAM_MESSAGE_LIMIT)}\n\n(сообщение обрезано, оно получилось слишком длинным)`
+      : text;
+
+  try {
+    await ctx.reply(safeText, extra);
+  } catch (error) {
+    console.error('Failed to send reply:', error);
+  }
 }
 
 function formatTransactionLine(t: TransactionListItem): string {

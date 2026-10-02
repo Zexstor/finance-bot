@@ -37,38 +37,33 @@ export interface RemovedTransaction {
 }
 
 export async function deleteLastTransaction(): Promise<RemovedTransaction | null> {
+  // Atomic server-side select+delete (a Postgres function) instead of a
+  // client-side select-then-delete, which had a race window between the
+  // two round trips.
   const { data, error } = await supabase
-    .from('transactions')
-    .select('id, type, amount, description, author:users(name)')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle<{
-      id: number;
+    .rpc('delete_last_transaction')
+    .single<{
+      user_id: number;
       type: TransactionType;
       amount: number;
       description: string | null;
-      author: EmbeddedName | null;
     }>();
 
   if (error) {
     throw error;
   }
 
-  if (!data) {
+  if (!data || data.user_id === null) {
     return null;
   }
 
-  const { error: deleteError } = await supabase.from('transactions').delete().eq('id', data.id);
-
-  if (deleteError) {
-    throw deleteError;
-  }
+  const { data: author } = await supabase.from('users').select('name').eq('id', data.user_id).maybeSingle();
 
   return {
     type: data.type,
     amount: Number(data.amount),
     description: data.description,
-    authorName: data.author?.name ?? 'Неизвестно',
+    authorName: author?.name ?? 'Неизвестно',
   };
 }
 
