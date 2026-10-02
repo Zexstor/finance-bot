@@ -1,12 +1,19 @@
-import { Bot, InlineKeyboard } from 'grammy';
+import { Bot, InlineKeyboard, type Context } from 'grammy';
 import { env } from '../config/env.js';
 import { accessControl } from './access-control.js';
 import { ensureUser } from '../db/users.js';
 import { getCategories, addCategory, deleteCategory } from '../db/categories.js';
-import { classifyTransaction } from '../ai/classify-transaction.js';
+import { classifyTransactions } from '../ai/classify-transaction.js';
+import { classifyReceipt } from '../ai/classify-receipt.js';
+import { transcribeVoice } from '../ai/transcribe-voice.js';
+import { downloadTelegramFile } from './download-telegram-file.js';
 import { setPending, takePending } from './pending-clarifications.js';
 import { setPendingCategoryType, takePendingCategoryType } from './pending-category-input.js';
-import type { Category, TransactionType } from '../types/db.js';
+import { setPendingReceipt, takePendingReceipt } from './pending-receipts.js';
+import { setPendingBatch, takePendingBatch } from './pending-batch.js';
+import { uploadReceiptImage } from '../db/storage.js';
+import { saveReceipt } from '../db/receipts.js';
+import type { Category, TransactionType, TransactionSource } from '../types/db.js';
 import {
   recordTransaction,
   listRecentTransactions,
@@ -175,6 +182,125 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
+  await handleTransactionText(ctx, text, 'text');
+});
+
+bot.on('message:voice', async (ctx) => {
+  let audioBuffer: Buffer;
+  try {
+    audioBuffer = await downloadTelegramFile(ctx, ctx.message.voice.file_id);
+  } catch (error) {
+    console.error('Failed to download voice message:', error);
+    await ctx.reply('Не получилось скачать голосовое, попробуй ещё раз.');
+    return;
+  }
+
+  let text: string;
+  try {
+    text = await transcribeVoice(audioBuffer);
+  } catch (error) {
+    console.error('Voice transcription failed:', error);
+    await ctx.reply('Не получилось распознать голосовое, попробуй ещё раз.');
+    return;
+  }
+
+  await ctx.reply(`🎤 Распознал: «${text}»`);
+  await handleTransactionText(ctx, text, 'voice');
+});
+
+bot.on('message:photo', async (ctx) => {
+  await ensureUser(ctx.from.id, ctx.from.first_name);
+
+  const photos = ctx.message.photo;
+  const largestPhoto = photos[photos.length - 1];
+
+  let imageBuffer: Buffer;
+  try {
+    imageBuffer = await downloadTelegramFile(ctx, largestPhoto.file_id);
+  } catch (error) {
+    console.error('Failed to download receipt photo:', error);
+    await ctx.reply('Не получилось скачать фото, попробуй ещё раз.');
+    return;
+  }
+
+  let categories: Category[];
+  try {
+    categories = await getCategories();
+  } catch (error) {
+    console.error('Failed to load categories:', error);
+    await ctx.reply('Не получилось обработать чек, попробуй ещё раз.');
+    return;
+  }
+
+  const expenseCategories = categories.filter((c) => c.type === 'expense');
+
+  let parsed;
+  try {
+    parsed = await classifyReceipt(imageBuffer, expenseCategories);
+  } catch (error) {
+    console.error('Receipt classification failed:', error);
+    await ctx.reply('Не получилось распознать чек, попробуй ещё раз.');
+    return;
+  }
+
+  if (parsed.items.length === 0) {
+    await ctx.reply('Не похоже на чек — не нашёл ни одной позиции.');
+    return;
+  }
+
+  const items = parsed.items.map((item) => {
+    const matched = expenseCategories.find((c) => c.name === item.category);
+    return {
+      name: item.name,
+      amount: item.amount,
+      categoryId: matched?.id ?? null,
+      categoryName: matched?.name ?? null,
+    };
+  });
+
+  setPendingReceipt(ctx.from.id, {
+    imageBuffer,
+    storeName: parsed.store,
+    totalAmount: parsed.total,
+    items,
+  });
+
+  const itemsSum = items.reduce((sum, item) => sum + item.amount, 0);
+  const lines = [`🧾 Чек: ${parsed.store ?? 'не определён'}`];
+  if (parsed.total !== null) {
+    lines.push(`Итого на чеке: ${parsed.total.toFixed(2)} €`);
+  }
+  lines.push('');
+  for (const item of items) {
+    lines.push(`➖ ${item.name} — ${item.amount.toFixed(2)} € — ${item.categoryName ?? 'Без категории'}`);
+  }
+  lines.push('', `Сумма позиций: ${itemsSum.toFixed(2)} €`);
+
+  const sumMismatch = parsed.total !== null && Math.abs(itemsSum - parsed.total) > 0.05;
+  if (sumMismatch) {
+    lines.push(
+      '',
+      '⚠️ Сумма позиций не совпадает с итогом чека — ИИ мог ошибиться при чтении фото. ' +
+        'Проверь числа внимательно. Если что-то не так — жми «Отмена» и впиши операции текстом вручную.',
+    );
+  } else if (parsed.lowConfidence) {
+    lines.push(
+      '',
+      '⚠️ ИИ дважды прочитал чек по-разному (хотя суммы совпали) — есть риск, что позиции ' +
+        'перепутаны местами. Сверь каждую позицию с чеком перед тем как сохранять.',
+    );
+  }
+
+  const keyboard = new InlineKeyboard().text('✅ Сохранить', 'receipt:confirm').row().text('❌ Отмена', 'receipt:cancel');
+
+  await ctx.reply(lines.join('\n'), { reply_markup: keyboard });
+});
+
+async function handleTransactionText(ctx: Context, text: string, source: TransactionSource): Promise<void> {
+  if (!ctx.from) {
+    return;
+  }
+
   await ensureUser(ctx.from.id, ctx.from.first_name);
 
   let categories;
@@ -186,65 +312,97 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
-  let result;
+  let transactions;
   try {
-    result = await classifyTransaction(text, categories);
+    transactions = await classifyTransactions(text, categories);
   } catch (error) {
     console.error('AI classification failed:', error);
     await ctx.reply('Не получилось обработать сообщение, попробуй ещё раз.');
     return;
   }
 
-  if (!result.type || result.amount === null) {
+  if (transactions.length === 0) {
     await ctx.reply('Не понял, это про деньги? Опиши операцию и сумму, например: кофе 3.5');
     return;
   }
 
-  if (result.currency && result.currency !== 'EUR') {
-    await ctx.reply('Пиши сумму в евро, попробуй ещё раз.');
+  if (transactions.some((t) => t.currency !== 'EUR')) {
+    await ctx.reply('Пиши суммы в евро, попробуй ещё раз.');
     return;
   }
 
-  const sameTypeCategories = categories.filter((c) => c.type === result.type);
-  const matchedCategory = result.category
-    ? sameTypeCategories.find((c) => c.name === result.category)
-    : undefined;
+  if (transactions.length === 1) {
+    const result = transactions[0];
+    const sameTypeCategories = categories.filter((c) => c.type === result.type);
+    const matchedCategory = result.category
+      ? sameTypeCategories.find((c) => c.name === result.category)
+      : undefined;
 
-  if (!matchedCategory) {
-    setPending(ctx.from.id, {
-      type: result.type,
-      amount: result.amount,
-      note: result.note,
-      categories: sameTypeCategories.map((c) => ({ id: c.id, name: c.name })),
-    });
+    if (!matchedCategory) {
+      setPending(ctx.from.id, {
+        type: result.type,
+        amount: result.amount,
+        note: result.note,
+        source,
+        categories: sameTypeCategories.map((c) => ({ id: c.id, name: c.name })),
+      });
 
-    const keyboard = new InlineKeyboard();
-    for (const category of sameTypeCategories) {
-      keyboard.text(category.name, `cat:${category.id}`).row();
+      const keyboard = new InlineKeyboard();
+      for (const category of sameTypeCategories) {
+        keyboard.text(category.name, `cat:${category.id}`).row();
+      }
+      keyboard.text('Без категории', 'cat:none').row();
+      keyboard.text('Отмена', 'cat:cancel');
+
+      const label = result.type === 'income' ? 'Доход' : 'Расход';
+      await ctx.reply(
+        `Не уверен с категорией. ${label}: ${result.amount.toFixed(2)} € — ${result.note || 'без заметки'}. Выбери категорию:`,
+        { reply_markup: keyboard },
+      );
+      return;
     }
-    keyboard.text('Без категории', 'cat:none').row();
-    keyboard.text('Отмена', 'cat:cancel');
 
+    try {
+      await recordTransaction(ctx.from.id, result.type, result.amount, result.note, matchedCategory.id, source);
+    } catch (error) {
+      console.error('Failed to record transaction:', error);
+      await ctx.reply('Не получилось сохранить, попробуй ещё раз.');
+      return;
+    }
+
+    const icon = result.type === 'income' ? '➕' : '➖';
     const label = result.type === 'income' ? 'Доход' : 'Расход';
     await ctx.reply(
-      `Не уверен с категорией. ${label}: ${result.amount.toFixed(2)} € — ${result.note || 'без заметки'}. Выбери категорию:`,
-      { reply_markup: keyboard },
+      `${icon} ${label}: ${result.amount.toFixed(2)} € — ${matchedCategory.name} (${result.note || 'без заметки'})`,
     );
     return;
   }
 
-  try {
-    await recordTransaction(ctx.from.id, result.type, result.amount, result.note, matchedCategory.id);
-  } catch (error) {
-    console.error('Failed to record transaction:', error);
-    await ctx.reply('Не получилось сохранить, попробуй ещё раз.');
-    return;
-  }
+  const resolvedItems = transactions.map((t) => {
+    const sameTypeCategories = categories.filter((c) => c.type === t.type);
+    const matched = t.category ? sameTypeCategories.find((c) => c.name === t.category) : undefined;
+    return {
+      type: t.type,
+      amount: t.amount,
+      note: t.note,
+      categoryId: matched?.id ?? null,
+      categoryName: matched?.name ?? null,
+    };
+  });
 
-  const icon = result.type === 'income' ? '➕' : '➖';
-  const label = result.type === 'income' ? 'Доход' : 'Расход';
-  await ctx.reply(`${icon} ${label}: ${result.amount.toFixed(2)} € — ${matchedCategory.name} (${result.note || 'без заметки'})`);
-});
+  setPendingBatch(ctx.from.id, { items: resolvedItems, source });
+
+  const lines = ['Нашёл несколько операций:'];
+  for (const item of resolvedItems) {
+    const icon = item.type === 'income' ? '➕' : '➖';
+    const label = item.categoryName ?? 'Без категории';
+    lines.push(`${icon} ${item.amount.toFixed(2)} € — ${label} (${item.note || 'без заметки'})`);
+  }
+  lines.push('', 'Сохранить всё?');
+
+  const keyboard = new InlineKeyboard().text('✅ Сохранить всё', 'batch:confirm').row().text('❌ Отмена', 'batch:cancel');
+  await ctx.reply(lines.join('\n'), { reply_markup: keyboard });
+}
 
 bot.on('callback_query:data', async (ctx) => {
   const data = ctx.callbackQuery.data;
@@ -291,6 +449,77 @@ bot.on('callback_query:data', async (ctx) => {
     return;
   }
 
+  if (data === 'receipt:cancel') {
+    takePendingReceipt(ctx.from.id);
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText('Отменено.');
+    return;
+  }
+
+  if (data === 'receipt:confirm') {
+    const pendingReceipt = takePendingReceipt(ctx.from.id);
+
+    if (!pendingReceipt) {
+      await ctx.answerCallbackQuery({ text: 'Это предложение устарело.' });
+      return;
+    }
+
+    const imagePath = `${ctx.from.id}/${Date.now()}.jpg`;
+
+    try {
+      await uploadReceiptImage(imagePath, pendingReceipt.imageBuffer);
+      await saveReceipt(
+        ctx.from.id,
+        pendingReceipt.storeName,
+        pendingReceipt.totalAmount,
+        imagePath,
+        pendingReceipt.items.map((item) => ({
+          name: item.name,
+          amount: item.amount,
+          categoryId: item.categoryId,
+        })),
+      );
+    } catch (error) {
+      console.error('Failed to save receipt:', error);
+      await ctx.answerCallbackQuery({ text: 'Не получилось сохранить чек.' });
+      return;
+    }
+
+    await ctx.answerCallbackQuery({ text: 'Сохранено' });
+    await ctx.editMessageText('✅ Чек сохранён.');
+    return;
+  }
+
+  if (data === 'batch:cancel') {
+    takePendingBatch(ctx.from.id);
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText('Отменено.');
+    return;
+  }
+
+  if (data === 'batch:confirm') {
+    const batch = takePendingBatch(ctx.from.id);
+
+    if (!batch) {
+      await ctx.answerCallbackQuery({ text: 'Это предложение устарело.' });
+      return;
+    }
+
+    try {
+      for (const item of batch.items) {
+        await recordTransaction(ctx.from.id, item.type, item.amount, item.note, item.categoryId, batch.source);
+      }
+    } catch (error) {
+      console.error('Failed to save batch:', error);
+      await ctx.answerCallbackQuery({ text: 'Не получилось сохранить.' });
+      return;
+    }
+
+    await ctx.answerCallbackQuery({ text: 'Сохранено' });
+    await ctx.editMessageText(`✅ Сохранено операций: ${batch.items.length}.`);
+    return;
+  }
+
   const pendingEntry = takePending(ctx.from.id);
 
   if (!pendingEntry) {
@@ -317,7 +546,14 @@ bot.on('callback_query:data', async (ctx) => {
   }
 
   try {
-    await recordTransaction(ctx.from.id, pendingEntry.type, pendingEntry.amount, pendingEntry.note, categoryId);
+    await recordTransaction(
+      ctx.from.id,
+      pendingEntry.type,
+      pendingEntry.amount,
+      pendingEntry.note,
+      categoryId,
+      pendingEntry.source,
+    );
   } catch (error) {
     console.error('Failed to record transaction after clarification:', error);
     await ctx.answerCallbackQuery({ text: 'Не получилось сохранить.' });

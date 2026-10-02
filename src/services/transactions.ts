@@ -1,5 +1,5 @@
 import { supabase } from '../db/client.js';
-import type { TransactionType } from '../types/db.js';
+import type { TransactionType, TransactionSource } from '../types/db.js';
 
 // supabase-js infers to-one embeds as arrays without generated DB types;
 // at runtime PostgREST actually returns a single object (or null) here.
@@ -13,13 +13,14 @@ export async function recordTransaction(
   amount: number,
   note: string,
   categoryId: number | null,
+  source: TransactionSource = 'text',
 ): Promise<void> {
   const { error } = await supabase.from('transactions').insert({
     user_id: userId,
     type,
     amount,
     description: note || null,
-    source: 'text',
+    source,
     category_id: categoryId,
   });
 

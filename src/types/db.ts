@@ -21,5 +21,16 @@ export interface Transaction {
   category_id: number | null;
   description: string | null;
   source: TransactionSource;
+  receipt_id: number | null;
   created_at: string;
+}
+
+export interface Receipt {
+  id: number;
+  user_id: number;
+  store_name: string | null;
+  total_amount: number | null;
+  image_path: string;
+  created_at: string;
+  expires_at: string;
 }
