@@ -4,9 +4,8 @@ import { getWeeklyReport } from '../services/report.js';
 import { truncateForTelegram } from '../bot/format.js';
 import { msUntilNextSunday } from './weekly-report-schedule.js';
 
-// Server-local time. Confirm the VPS timezone matches what the family expects
-// (e.g. set TZ=Europe/Podgorica in the Docker container) before relying on
-// this landing at the intended wall-clock hour.
+// Process-local time. The Docker image sets TZ=Europe/Podgorica, so this is
+// 10:00 Montenegro time regardless of the host VPS's own timezone.
 const SEND_HOUR = 10;
 
 async function sendWeeklyReport(): Promise<void> {
