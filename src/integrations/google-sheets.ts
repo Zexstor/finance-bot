@@ -47,6 +47,9 @@ export async function appendTransactionRow(row: SheetRowInput): Promise<void> {
     const sheet = await getSheet();
     await sheet.addRow(formatSheetRow(row));
   } catch (error) {
-    console.error('Failed to append row to Google Sheet:', error);
+    // Don't log the raw error object: google-auth-library errors embed the
+    // outgoing request, including the live Authorization bearer token.
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Failed to append row to Google Sheet:', message);
   }
 }
