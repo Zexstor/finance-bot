@@ -7,3 +7,8 @@ export function truncateForTelegram(text: string, limit = TELEGRAM_MESSAGE_LIMIT
 
   return `${text.slice(0, limit)}\n\n(сообщение обрезано, оно получилось слишком длинным)`;
 }
+
+export function formatBalanceLine(balance: number): string {
+  const label = balance >= 0 ? 'Остаток за месяц' : 'Перерасход за месяц';
+  return `${label}: ${Math.abs(balance).toFixed(2)} €`;
+}

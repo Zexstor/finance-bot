@@ -115,6 +115,27 @@ export async function getWeeklyReport(): Promise<WeeklyReport> {
   return { income, totalExpenses, balance: income - totalExpenses, expensesByCategory };
 }
 
+export async function getMonthlyBalance(): Promise<number> {
+  const { start, end } = getMonthRange();
+
+  const [incomeResult, expenseResult] = await Promise.all([
+    supabase.from('transactions').select('amount').eq('type', 'income').gte('created_at', start).lt('created_at', end),
+    supabase.from('transactions').select('amount').eq('type', 'expense').gte('created_at', start).lt('created_at', end),
+  ]);
+
+  if (incomeResult.error) {
+    throw incomeResult.error;
+  }
+  if (expenseResult.error) {
+    throw expenseResult.error;
+  }
+
+  const income = (incomeResult.data ?? []).reduce((sum, row) => sum + Number(row.amount), 0);
+  const expenses = (expenseResult.data ?? []).reduce((sum, row) => sum + Number(row.amount), 0);
+
+  return income - expenses;
+}
+
 export async function getMonthlyReport(): Promise<MonthlyReport> {
   const { start, end, label } = getMonthRange();
 

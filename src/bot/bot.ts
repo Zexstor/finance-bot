@@ -20,9 +20,9 @@ import {
   deleteLastTransaction,
   type TransactionListItem,
 } from '../services/transactions.js';
-import { getMonthlyReport, setMonthlyGoal, type MonthlyReport } from '../services/report.js';
+import { getMonthlyReport, getMonthlyBalance, setMonthlyGoal, type MonthlyReport } from '../services/report.js';
 import { isSumMismatched } from '../ai/receipt-logic.js';
-import { truncateForTelegram } from './format.js';
+import { truncateForTelegram, formatBalanceLine } from './format.js';
 import { appendTransactionRow } from '../integrations/google-sheets.js';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
@@ -406,8 +406,9 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
 
     const icon = result.type === 'income' ? '➕' : '➖';
     const label = result.type === 'income' ? 'Доход' : 'Расход';
+    const balanceSuffix = await getBalanceSuffix();
     await ctx.reply(
-      `${icon} ${label}: ${result.amount.toFixed(2)} € — ${matchedCategory.name} (${result.note || 'без заметки'})`,
+      `${icon} ${label}: ${result.amount.toFixed(2)} € — ${matchedCategory.name} (${result.note || 'без заметки'})${balanceSuffix}`,
     );
     return;
   }
@@ -544,8 +545,9 @@ bot.on('callback_query:data', async (ctx) => {
       });
     }
 
+    const receiptBalanceSuffix = await getBalanceSuffix();
     await ctx.answerCallbackQuery({ text: 'Сохранено' });
-    await ctx.editMessageText('✅ Чек сохранён.');
+    await ctx.editMessageText(`✅ Чек сохранён.${receiptBalanceSuffix}`);
     return;
   }
 
@@ -587,8 +589,9 @@ bot.on('callback_query:data', async (ctx) => {
       });
     }
 
+    const batchBalanceSuffix = await getBalanceSuffix();
     await ctx.answerCallbackQuery({ text: 'Сохранено' });
-    await ctx.editMessageText(`✅ Сохранено операций: ${batch.items.length}.`);
+    await ctx.editMessageText(`✅ Сохранено операций: ${batch.items.length}.${batchBalanceSuffix}`);
     return;
   }
 
@@ -640,11 +643,12 @@ bot.on('callback_query:data', async (ctx) => {
     createdAt: new Date().toISOString(),
   });
 
+  const clarifyBalanceSuffix = await getBalanceSuffix();
   await ctx.answerCallbackQuery();
   const icon = pendingEntry.type === 'income' ? '➕' : '➖';
   const label = pendingEntry.type === 'income' ? 'Доход' : 'Расход';
   await ctx.editMessageText(
-    `${icon} ${label}: ${pendingEntry.amount.toFixed(2)} € — ${categoryName} (${pendingEntry.note || 'без заметки'})`,
+    `${icon} ${label}: ${pendingEntry.amount.toFixed(2)} € — ${categoryName} (${pendingEntry.note || 'без заметки'})${clarifyBalanceSuffix}`,
   );
 });
 
@@ -679,6 +683,16 @@ async function replyText(
     await ctx.reply(safeText, extra);
   } catch (error) {
     console.error('Failed to send reply:', error);
+  }
+}
+
+async function getBalanceSuffix(): Promise<string> {
+  try {
+    const balance = await getMonthlyBalance();
+    return `\n\n${formatBalanceLine(balance)}`;
+  } catch (error) {
+    console.error('Failed to fetch monthly balance:', error);
+    return '';
   }
 }
 
