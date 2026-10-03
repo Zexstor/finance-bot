@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { truncateForTelegram, formatBalanceLine } from './format.js';
+import { truncateForTelegram, formatBalanceLine, formatQueryAnswer } from './format.js';
 
 test('truncateForTelegram: short text passes through unchanged', () => {
   assert.equal(truncateForTelegram('кофе 3.5'), 'кофе 3.5');
@@ -29,4 +29,34 @@ test('formatBalanceLine: zero balance labeled "Остаток" (not overspend)',
 
 test('formatBalanceLine: negative balance labeled "Перерасход" with absolute value', () => {
   assert.equal(formatBalanceLine(-45.5), 'Перерасход за месяц: 45.50 €');
+});
+
+const CATEGORIES = [
+  { name: 'Кафе и рестораны', total: 25.5 },
+  { name: 'Транспорт', total: 10 },
+];
+
+test('formatQueryAnswer: specific category returns its own total', () => {
+  const answer = formatQueryAnswer('этот месяц', 500, 100, CATEGORIES, 'Транспорт');
+  assert.equal(answer, 'Расходы на «Транспорт» за этот месяц: 10.00 €');
+});
+
+test('formatQueryAnswer: category lookup is case-insensitive', () => {
+  const answer = formatQueryAnswer('этот месяц', 500, 100, CATEGORIES, 'транспорт');
+  assert.equal(answer, 'Расходы на «транспорт» за этот месяц: 10.00 €');
+});
+
+test('formatQueryAnswer: unknown category returns zero, not an error', () => {
+  const answer = formatQueryAnswer('этот месяц', 500, 100, CATEGORIES, 'Одежда');
+  assert.equal(answer, 'Расходы на «Одежда» за этот месяц: 0.00 €');
+});
+
+test('formatQueryAnswer: no category gives the overall summary with balance', () => {
+  const answer = formatQueryAnswer('этот месяц', 500, 100, CATEGORIES, null);
+  assert.equal(answer, 'За этот месяц: доход 500.00 €, расход 100.00 €, остаток 400.00 €');
+});
+
+test('formatQueryAnswer: overall summary shows "перерасход" when expenses exceed income', () => {
+  const answer = formatQueryAnswer('этот месяц', 50, 100, CATEGORIES, null);
+  assert.equal(answer, 'За этот месяц: доход 50.00 €, расход 100.00 €, перерасход 50.00 €');
 });

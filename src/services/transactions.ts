@@ -68,6 +68,7 @@ export async function deleteLastTransaction(): Promise<RemovedTransaction | null
 }
 
 export interface TransactionListItem {
+  id: number;
   type: TransactionType;
   amount: number;
   description: string | null;
@@ -79,11 +80,12 @@ export interface TransactionListItem {
 export async function listRecentTransactions(limit: number): Promise<TransactionListItem[]> {
   const { data, error } = await supabase
     .from('transactions')
-    .select('type, amount, description, created_at, author:users(name), category:categories(name)')
+    .select('id, type, amount, description, created_at, author:users(name), category:categories(name)')
     .order('created_at', { ascending: false })
     .limit(limit)
     .returns<
       {
+        id: number;
         type: TransactionType;
         amount: number;
         description: string | null;
@@ -98,6 +100,7 @@ export async function listRecentTransactions(limit: number): Promise<Transaction
   }
 
   return (data ?? []).map((row) => ({
+    id: row.id,
     type: row.type,
     amount: Number(row.amount),
     description: row.description,
@@ -105,4 +108,37 @@ export async function listRecentTransactions(limit: number): Promise<Transaction
     authorName: row.author?.name ?? 'Неизвестно',
     categoryName: row.category?.name ?? null,
   }));
+}
+
+export interface TransactionUpdate {
+  categoryId?: number | null;
+  amount?: number;
+  note?: string;
+}
+
+export async function updateTransaction(id: number, patch: TransactionUpdate): Promise<void> {
+  const update: Record<string, unknown> = {};
+  if (patch.categoryId !== undefined) {
+    update.category_id = patch.categoryId;
+  }
+  if (patch.amount !== undefined) {
+    update.amount = patch.amount;
+  }
+  if (patch.note !== undefined) {
+    update.description = patch.note || null;
+  }
+
+  const { error } = await supabase.from('transactions').update(update).eq('id', id);
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function deleteTransactionById(id: number): Promise<void> {
+  const { error } = await supabase.from('transactions').delete().eq('id', id);
+
+  if (error) {
+    throw error;
+  }
 }

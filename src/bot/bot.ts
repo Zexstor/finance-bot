@@ -5,12 +5,14 @@ import { ensureUser } from '../db/users.js';
 import { getCategories, addCategory, deleteCategory } from '../db/categories.js';
 import { classifyTransactions } from '../ai/classify-transaction.js';
 import { classifyReceipt } from '../ai/classify-receipt.js';
+import { classifyAgentIntent } from '../ai/classify-agent-intent.js';
 import { transcribeVoice } from '../ai/transcribe-voice.js';
 import { downloadTelegramFile } from './download-telegram-file.js';
 import { setPending, takePending } from './pending-clarifications.js';
 import { setPendingCategoryType, takePendingCategoryType } from './pending-category-input.js';
 import { setPendingReceipt, takePendingReceipt, hasPendingReceipt } from './pending-receipts.js';
 import { setPendingBatch, takePendingBatch } from './pending-batch.js';
+import { setPendingAgentAction, takePendingAgentAction } from './pending-agent-action.js';
 import { uploadReceiptImage, deleteReceiptImage } from '../db/storage.js';
 import { saveReceipt } from '../db/receipts.js';
 import type { Category, TransactionType, TransactionSource } from '../types/db.js';
@@ -18,11 +20,20 @@ import {
   recordTransaction,
   listRecentTransactions,
   deleteLastTransaction,
+  updateTransaction,
+  deleteTransactionById,
   type TransactionListItem,
+  type TransactionUpdate,
 } from '../services/transactions.js';
-import { getMonthlyReport, getMonthlyBalance, setMonthlyGoal, type MonthlyReport } from '../services/report.js';
+import {
+  getMonthlyReport,
+  getMonthlyBalance,
+  getWeeklyReport,
+  setMonthlyGoal,
+  type MonthlyReport,
+} from '../services/report.js';
 import { isSumMismatched } from '../ai/receipt-logic.js';
-import { truncateForTelegram, formatBalanceLine } from './format.js';
+import { truncateForTelegram, formatBalanceLine, formatQueryAnswer } from './format.js';
 import { appendTransactionRow, appendTransactionRows } from '../integrations/google-sheets.js';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
@@ -359,7 +370,7 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
   }
 
   if (transactions.length === 0) {
-    await ctx.reply('Не понял, это про деньги? Опиши операцию и сумму, например: кофе 3.5');
+    await handleAgentFallback(ctx, text, categories);
     return;
   }
 
@@ -448,6 +459,124 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
 
   const keyboard = new InlineKeyboard().text('✅ Сохранить всё', 'batch:confirm').row().text('❌ Отмена', 'batch:cancel');
   await replyText(ctx, lines.join('\n'), { reply_markup: keyboard });
+}
+
+const CANT_PARSE_MESSAGE = 'Не понял, это про деньги? Опиши операцию и сумму, например: кофе 3.5';
+
+function formatTargetSummary(t: TransactionListItem): string {
+  const icon = t.type === 'income' ? '➕' : '➖';
+  return `${icon} ${t.amount.toFixed(2)} € — ${t.categoryName ?? 'без категории'} (${t.description || 'без заметки'})`;
+}
+
+// Runs when the text classifier found no transaction in the message at all.
+// Rather than always answering "не понял", ask a second AI call whether this
+// is actually a correction to a recent entry, a delete request, or a
+// question about spending -- the kind of thing a real assistant, not just a
+// parser, should be able to handle.
+async function handleAgentFallback(ctx: Context, text: string, categories: Category[]): Promise<void> {
+  if (!ctx.from) {
+    return;
+  }
+
+  let recent: TransactionListItem[];
+  try {
+    recent = await listRecentTransactions(20);
+  } catch (error) {
+    console.error('Failed to load recent transactions for agent intent:', error);
+    await ctx.reply(CANT_PARSE_MESSAGE);
+    return;
+  }
+
+  let intent;
+  try {
+    intent = await classifyAgentIntent(text, categories, recent);
+  } catch (error) {
+    console.error('Agent intent classification failed:', error);
+    await ctx.reply(CANT_PARSE_MESSAGE);
+    return;
+  }
+
+  if (intent.intent === 'unclear') {
+    await ctx.reply(CANT_PARSE_MESSAGE);
+    return;
+  }
+
+  if (intent.intent === 'query') {
+    const period = intent.queryPeriod ?? 'month';
+    try {
+      const answer =
+        period === 'week'
+          ? await getWeeklyReport().then((r) =>
+              formatQueryAnswer('эту неделю', r.income, r.totalExpenses, r.expensesByCategory, intent.queryCategory),
+            )
+          : await getMonthlyReport().then((r) =>
+              formatQueryAnswer('этот месяц', r.income, r.totalExpenses, r.expensesByCategory, intent.queryCategory),
+            );
+      await replyText(ctx, answer);
+    } catch (error) {
+      console.error('Failed to answer agent query:', error);
+      await ctx.reply('Не получилось посчитать, попробуй ещё раз.');
+    }
+    return;
+  }
+
+  // edit or delete: must refer to one of the transactions we actually
+  // showed the AI, not something it invented.
+  const target = recent.find((t) => t.id === intent.transactionId);
+  if (!target) {
+    await ctx.reply('Не понял, какую именно операцию ты имеешь в виду — посмотри /list и уточни.');
+    return;
+  }
+
+  if (intent.intent === 'delete') {
+    const summary = formatTargetSummary(target);
+    setPendingAgentAction(ctx.from.id, { kind: 'delete', transactionId: target.id, patch: null, summary });
+    const keyboard = new InlineKeyboard().text('✅ Удалить', 'agent:confirm').row().text('❌ Отмена', 'agent:cancel');
+    await ctx.reply(`Удалить операцию?\n${summary}`, { reply_markup: keyboard });
+    return;
+  }
+
+  // edit
+  if (!intent.editField || intent.editValue === null) {
+    await ctx.reply('Не понял, что именно исправить — уточни поле и новое значение.');
+    return;
+  }
+
+  let patch: TransactionUpdate;
+  let changeDescription: string;
+
+  if (intent.editField === 'category') {
+    const sameTypeCategories = categories.filter((c) => c.type === target.type);
+    const matched = sameTypeCategories.find((c) => c.name.toLowerCase() === intent.editValue?.toLowerCase());
+    if (!matched) {
+      await ctx.reply(`Не нашёл категорию «${intent.editValue}» среди доступных — посмотри /categories.`);
+      return;
+    }
+    patch = { categoryId: matched.id };
+    changeDescription = `категория → «${matched.name}»`;
+  } else if (intent.editField === 'amount') {
+    const newAmount = Number(intent.editValue.replace(',', '.'));
+    if (!Number.isFinite(newAmount) || newAmount <= 0) {
+      await ctx.reply('Не понял новую сумму.');
+      return;
+    }
+    patch = { amount: newAmount };
+    changeDescription = `сумма → ${newAmount.toFixed(2)} €`;
+  } else {
+    patch = { note: intent.editValue };
+    changeDescription = `заметка → «${intent.editValue}»`;
+  }
+
+  const summary = formatTargetSummary(target);
+  setPendingAgentAction(ctx.from.id, {
+    kind: 'edit',
+    transactionId: target.id,
+    patch,
+    summary: `${summary}\n${changeDescription}`,
+  });
+
+  const keyboard = new InlineKeyboard().text('✅ Исправить', 'agent:confirm').row().text('❌ Отмена', 'agent:cancel');
+  await ctx.reply(`Исправить операцию?\n${summary}\n${changeDescription}`, { reply_markup: keyboard });
 }
 
 bot.on('callback_query:data', async (ctx) => {
@@ -563,6 +692,41 @@ bot.on('callback_query:data', async (ctx) => {
 
     const receiptBalanceSuffix = await getBalanceSuffix();
     await ctx.editMessageText(`✅ Чек сохранён.${receiptBalanceSuffix}`);
+    return;
+  }
+
+  if (data === 'agent:cancel') {
+    takePendingAgentAction(ctx.from.id);
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText('Отменено.');
+    return;
+  }
+
+  if (data === 'agent:confirm') {
+    const action = takePendingAgentAction(ctx.from.id);
+
+    if (!action) {
+      await ctx.answerCallbackQuery({ text: 'Это предложение устарело.' });
+      return;
+    }
+
+    // Ack before the DB work, consistent with the receipt/batch handlers.
+    await ctx.answerCallbackQuery({ text: 'Готово' });
+
+    try {
+      if (action.kind === 'delete') {
+        await deleteTransactionById(action.transactionId);
+      } else if (action.patch) {
+        await updateTransaction(action.transactionId, action.patch);
+      }
+    } catch (error) {
+      console.error('Failed to apply agent action:', error);
+      await ctx.editMessageText('Не получилось применить изменение, попробуй ещё раз.');
+      return;
+    }
+
+    const label = action.kind === 'delete' ? '🗑 Удалено' : '✏️ Исправлено';
+    await ctx.editMessageText(`${label}:\n${action.summary}`);
     return;
   }
 
