@@ -9,7 +9,7 @@ import { transcribeVoice } from '../ai/transcribe-voice.js';
 import { downloadTelegramFile } from './download-telegram-file.js';
 import { setPending, takePending } from './pending-clarifications.js';
 import { setPendingCategoryType, takePendingCategoryType } from './pending-category-input.js';
-import { setPendingReceipt, takePendingReceipt } from './pending-receipts.js';
+import { setPendingReceipt, takePendingReceipt, hasPendingReceipt } from './pending-receipts.js';
 import { setPendingBatch, takePendingBatch } from './pending-batch.js';
 import { uploadReceiptImage, deleteReceiptImage } from '../db/storage.js';
 import { saveReceipt } from '../db/receipts.js';
@@ -23,7 +23,7 @@ import {
 import { getMonthlyReport, getMonthlyBalance, setMonthlyGoal, type MonthlyReport } from '../services/report.js';
 import { isSumMismatched } from '../ai/receipt-logic.js';
 import { truncateForTelegram, formatBalanceLine } from './format.js';
-import { appendTransactionRow } from '../integrations/google-sheets.js';
+import { appendTransactionRow, appendTransactionRows } from '../integrations/google-sheets.js';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 
@@ -223,6 +223,17 @@ bot.on('message:voice', async (ctx) => {
 });
 
 bot.on('message:photo', async (ctx) => {
+  // A second photo arriving before the first one is confirmed/cancelled
+  // used to silently overwrite the pending receipt -- the user would tap
+  // "Сохранить" on what they thought was receipt #1, but actually save
+  // receipt #2's data, with #1 lost entirely. Refuse instead.
+  if (hasPendingReceipt(ctx.from.id)) {
+    await ctx.reply(
+      'У тебя уже есть неподтверждённый чек — сначала нажми «Сохранить» или «Отмена» на нём, потом присылай следующий.',
+    );
+    return;
+  }
+
   try {
     await ensureUser(ctx.from.id, ctx.from.first_name);
   } catch (error) {
@@ -499,13 +510,22 @@ bot.on('callback_query:data', async (ctx) => {
       return;
     }
 
+    // Acknowledge the callback immediately, before any slow work. Telegram
+    // invalidates a callback query after a short window; previously this was
+    // called only at the very end, after upload + DB save + a Sheets API
+    // round trip per line item -- a receipt with enough items could blow
+    // past that window, so answerCallbackQuery itself failed with "query is
+    // too old" and the user never saw any confirmation, even though the
+    // save had already gone through.
+    await ctx.answerCallbackQuery({ text: 'Сохраняю...' });
+
     const imagePath = `${ctx.from.id}/${Date.now()}.jpg`;
 
     try {
       await uploadReceiptImage(imagePath, pendingReceipt.imageBuffer);
     } catch (error) {
       console.error('Failed to upload receipt image:', error);
-      await ctx.answerCallbackQuery({ text: 'Не получилось сохранить чек.' });
+      await ctx.editMessageText('Не получилось сохранить чек, попробуй ещё раз.');
       return;
     }
 
@@ -526,27 +546,22 @@ bot.on('callback_query:data', async (ctx) => {
       await deleteReceiptImage(imagePath).catch((cleanupError) => {
         console.error('Failed to clean up orphaned receipt image:', cleanupError);
       });
-      await ctx.answerCallbackQuery({ text: 'Не получилось сохранить чек.' });
+      await ctx.editMessageText('Не получилось сохранить чек, попробуй ещё раз.');
       return;
     }
 
     const receiptCreatedAt = new Date().toISOString();
-    for (const item of pendingReceipt.items) {
-      // Awaited sequentially, not fired concurrently: each call reads the
-      // sheet to find the first empty row, then writes it. Firing these in
-      // parallel let multiple items race to the same "empty" row, so only
-      // the last write to land actually stuck -- the rest silently vanished.
-      await appendTransactionRow({
+    await appendTransactionRows(
+      pendingReceipt.items.map((item) => ({
         type: 'expense',
         amount: item.amount,
         categoryName: item.categoryName,
         note: item.name,
         createdAt: receiptCreatedAt,
-      });
-    }
+      })),
+    );
 
     const receiptBalanceSuffix = await getBalanceSuffix();
-    await ctx.answerCallbackQuery({ text: 'Сохранено' });
     await ctx.editMessageText(`✅ Чек сохранён.${receiptBalanceSuffix}`);
     return;
   }
@@ -566,31 +581,32 @@ bot.on('callback_query:data', async (ctx) => {
       return;
     }
 
+    // See the matching comment in the receipt branch above: ack before the
+    // slow work, not after.
+    await ctx.answerCallbackQuery({ text: 'Сохраняю...' });
+
     try {
       for (const item of batch.items) {
         await recordTransaction(ctx.from.id, item.type, item.amount, item.note, item.categoryId, batch.source);
       }
     } catch (error) {
       console.error('Failed to save batch:', error);
-      await ctx.answerCallbackQuery({ text: 'Не получилось сохранить.' });
+      await ctx.editMessageText('Не получилось сохранить, попробуй ещё раз.');
       return;
     }
 
     const batchCreatedAt = new Date().toISOString();
-    for (const item of batch.items) {
-      // See the matching comment in the receipt branch above: must be
-      // awaited sequentially, not fired concurrently.
-      await appendTransactionRow({
+    await appendTransactionRows(
+      batch.items.map((item) => ({
         type: item.type,
         amount: item.amount,
         categoryName: item.categoryName,
         note: item.note,
         createdAt: batchCreatedAt,
-      });
-    }
+      })),
+    );
 
     const batchBalanceSuffix = await getBalanceSuffix();
-    await ctx.answerCallbackQuery({ text: 'Сохранено' });
     await ctx.editMessageText(`✅ Сохранено операций: ${batch.items.length}.${batchBalanceSuffix}`);
     return;
   }

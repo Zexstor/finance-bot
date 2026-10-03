@@ -30,3 +30,10 @@ export function takePendingReceipt(userId: number): PendingReceipt | null {
 
   return entry;
 }
+
+// Non-consuming check, used to warn about (rather than silently discard) an
+// unconfirmed receipt when a new photo arrives before it's been dealt with.
+export function hasPendingReceipt(userId: number): boolean {
+  const entry = pending.get(userId);
+  return entry !== undefined && entry.expiresAt >= Date.now();
+}

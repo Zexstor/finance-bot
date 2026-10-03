@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setPending, takePending } from './pending-clarifications.js';
 import { setPendingCategoryType, takePendingCategoryType } from './pending-category-input.js';
-import { setPendingReceipt, takePendingReceipt } from './pending-receipts.js';
+import { setPendingReceipt, takePendingReceipt, hasPendingReceipt } from './pending-receipts.js';
 import { setPendingBatch, takePendingBatch } from './pending-batch.js';
 
 // All four pending-* stores share the same "take once" contract: a button
@@ -70,6 +70,22 @@ test('pending-batch: take returns the data once, then null', () => {
   assert.equal(first?.source, 'voice');
 
   assert.equal(takePendingBatch(userId), null);
+});
+
+test('pending-receipts: hasPendingReceipt reflects the take-once state, not just existence', () => {
+  const userId = 900007;
+  assert.equal(hasPendingReceipt(userId), false);
+
+  setPendingReceipt(userId, {
+    imageBuffer: Buffer.from('fake-jpeg-bytes'),
+    storeName: null,
+    totalAmount: null,
+    items: [],
+  });
+  assert.equal(hasPendingReceipt(userId), true);
+
+  takePendingReceipt(userId);
+  assert.equal(hasPendingReceipt(userId), false);
 });
 
 test('pending-batch: a second photo/message for the same user overwrites the first pending entry', () => {
