@@ -4,7 +4,7 @@ import { accessControl } from './access-control.js';
 import { ensureUser } from '../db/users.js';
 import { getCategories, addCategory, deleteCategory } from '../db/categories.js';
 import { classifyTransactions } from '../ai/classify-transaction.js';
-import { classifyReceipt } from '../ai/classify-receipt.js';
+import { classifyReceipt, ReceiptTruncatedError } from '../ai/classify-receipt.js';
 import { classifyAgentIntent } from '../ai/classify-agent-intent.js';
 import { transcribeVoice } from '../ai/transcribe-voice.js';
 import { downloadTelegramFile } from './download-telegram-file.js';
@@ -288,7 +288,15 @@ bot.on('message:photo', async (ctx) => {
     parsed = await classifyReceipt(imageBuffer, expenseCategories);
   } catch (error) {
     console.error('Receipt classification failed:', error);
-    await ctx.reply('Не получилось распознать чек, попробуй ещё раз.');
+    if (error instanceof ReceiptTruncatedError) {
+      await ctx.reply(
+        'Чек оказался слишком сложным для распознавания — ответ ИИ не поместился в лимит. ' +
+          'Попробуй переснять при хорошем освещении и без бликов, сфотографировать по частям, ' +
+          'или ввести позиции текстом вручную.',
+      );
+    } else {
+      await ctx.reply('Не получилось распознать чек, попробуй ещё раз.');
+    }
     return;
   }
 

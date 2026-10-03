@@ -6,6 +6,15 @@ import { receiptSchema, normalizeTranscript } from './receipt-logic.js';
 
 export type ReceiptClassification = z.infer<typeof receiptSchema> & { lowConfidence: boolean };
 
+// Thrown when an OpenAI completion was cut off by the output-token limit
+// (finish_reason === 'length') rather than finishing normally. Seen in
+// practice on hard-to-read receipt photos, where the vision model starts
+// degenerating into abnormally long, repetitive output instead of a clean
+// transcript/JSON -- the response then gets truncated mid-string, which
+// otherwise surfaces as an opaque JSON.parse SyntaxError. Kept as its own
+// error type so the bot can show the user a more specific message.
+export class ReceiptTruncatedError extends Error {}
+
 async function transcribeReceiptText(imageBuffer: Buffer): Promise<string> {
   const base64Image = imageBuffer.toString('base64');
 
@@ -40,6 +49,10 @@ async function transcribeReceiptText(imageBuffer: Buffer): Promise<string> {
       },
     ],
   });
+
+  if (completion.choices[0]?.finish_reason === 'length') {
+    throw new ReceiptTruncatedError('Receipt transcription was truncated by the output-token limit');
+  }
 
   const content = completion.choices[0]?.message?.content;
 
@@ -165,6 +178,10 @@ export async function classifyReceipt(
       },
     },
   });
+
+  if (completion.choices[0]?.finish_reason === 'length') {
+    throw new ReceiptTruncatedError('Receipt classification response was truncated by the output-token limit');
+  }
 
   const content = completion.choices[0]?.message?.content;
 
