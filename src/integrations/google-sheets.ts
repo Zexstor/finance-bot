@@ -132,3 +132,111 @@ export async function appendTransactionRows(rows: RowWithDate[]): Promise<void> 
     console.error('Failed to append rows to Google Sheet:', message);
   }
 }
+
+// The template has no hidden transaction-id column, so a specific row can
+// only be located by matching description + amount within its type block.
+// Returns null (and touches nothing) unless the match is unique -- editing
+// or clearing the wrong row of a shared family spreadsheet on a guess is
+// worse than leaving one row stale.
+async function findUniqueRow(
+  sheet: GoogleSpreadsheetWorksheet,
+  cols: TemplateColumns,
+  description: string,
+  amount: number,
+): Promise<number | null> {
+  await sheet.loadCells({
+    startRowIndex: FIRST_DATA_ROW,
+    endRowIndex: MAX_ROW,
+    startColumnIndex: cols.amount,
+    endColumnIndex: cols.description + 1,
+  });
+
+  const normalizedTarget = description.trim().toLowerCase();
+  const matches: number[] = [];
+
+  for (let r = FIRST_DATA_ROW; r < MAX_ROW; r++) {
+    const amountValue = sheet.getCell(r, cols.amount).value;
+    const descValue = sheet.getCell(r, cols.description).value;
+
+    if (
+      typeof amountValue === 'number' &&
+      Math.abs(amountValue - amount) < 0.005 &&
+      typeof descValue === 'string' &&
+      descValue.trim().toLowerCase() === normalizedTarget
+    ) {
+      matches.push(r);
+    }
+  }
+
+  return matches.length === 1 ? matches[0] : null;
+}
+
+export interface SheetRowMatch {
+  type: RowWithDate['type'];
+  amount: number;
+  description: string;
+}
+
+export interface SheetRowEdits {
+  amount?: number;
+  description?: string;
+  categoryName?: string;
+}
+
+export async function updateTransactionInSheet(match: SheetRowMatch, edits: SheetRowEdits): Promise<void> {
+  if (!isConfigured()) {
+    return;
+  }
+
+  try {
+    const sheet = await getSheet();
+    const cols = columnsFor(match.type);
+    const row = await findUniqueRow(sheet, cols, match.description, match.amount);
+
+    if (row === null) {
+      console.error('updateTransactionInSheet: could not uniquely locate the row (not found or ambiguous)');
+      return;
+    }
+
+    if (edits.amount !== undefined) {
+      sheet.getCell(row, cols.amount).value = edits.amount;
+    }
+    if (edits.description !== undefined) {
+      sheet.getCell(row, cols.description).value = edits.description;
+    }
+    if (edits.categoryName !== undefined) {
+      sheet.getCell(row, cols.category).value = edits.categoryName;
+    }
+
+    await sheet.saveUpdatedCells();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Failed to update row in Google Sheet:', message);
+  }
+}
+
+export async function deleteTransactionFromSheet(match: SheetRowMatch): Promise<void> {
+  if (!isConfigured()) {
+    return;
+  }
+
+  try {
+    const sheet = await getSheet();
+    const cols = columnsFor(match.type);
+    const row = await findUniqueRow(sheet, cols, match.description, match.amount);
+
+    if (row === null) {
+      console.error('deleteTransactionFromSheet: could not uniquely locate the row (not found or ambiguous)');
+      return;
+    }
+
+    for (const col of [cols.date, cols.amount, cols.description, cols.category]) {
+      sheet.getCell(row, col).value = '';
+    }
+
+    await sheet.saveUpdatedCells();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Failed to clear row in Google Sheet:', message);
+  }
+}

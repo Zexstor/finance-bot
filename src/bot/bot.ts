@@ -34,7 +34,14 @@ import {
 } from '../services/report.js';
 import { isSumMismatched } from '../ai/receipt-logic.js';
 import { truncateForTelegram, formatBalanceLine, formatQueryAnswer } from './format.js';
-import { appendTransactionRow, appendTransactionRows } from '../integrations/google-sheets.js';
+import {
+  appendTransactionRow,
+  appendTransactionRows,
+  updateTransactionInSheet,
+  deleteTransactionFromSheet,
+  type SheetRowMatch,
+  type SheetRowEdits,
+} from '../integrations/google-sheets.js';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 
@@ -528,9 +535,18 @@ async function handleAgentFallback(ctx: Context, text: string, categories: Categ
     return;
   }
 
+  const original = { type: target.type, amount: target.amount, description: target.description };
+
   if (intent.intent === 'delete') {
     const summary = formatTargetSummary(target);
-    setPendingAgentAction(ctx.from.id, { kind: 'delete', transactionId: target.id, patch: null, summary });
+    setPendingAgentAction(ctx.from.id, {
+      kind: 'delete',
+      transactionId: target.id,
+      patch: null,
+      sheetEdits: null,
+      summary,
+      original,
+    });
     const keyboard = new InlineKeyboard().text('✅ Удалить', 'agent:confirm').row().text('❌ Отмена', 'agent:cancel');
     await ctx.reply(`Удалить операцию?\n${summary}`, { reply_markup: keyboard });
     return;
@@ -543,6 +559,7 @@ async function handleAgentFallback(ctx: Context, text: string, categories: Categ
   }
 
   let patch: TransactionUpdate;
+  let sheetEdits: SheetRowEdits;
   let changeDescription: string;
 
   if (intent.editField === 'category') {
@@ -553,6 +570,7 @@ async function handleAgentFallback(ctx: Context, text: string, categories: Categ
       return;
     }
     patch = { categoryId: matched.id };
+    sheetEdits = { categoryName: matched.name };
     changeDescription = `категория → «${matched.name}»`;
   } else if (intent.editField === 'amount') {
     const newAmount = Number(intent.editValue.replace(',', '.'));
@@ -561,9 +579,11 @@ async function handleAgentFallback(ctx: Context, text: string, categories: Categ
       return;
     }
     patch = { amount: newAmount };
+    sheetEdits = { amount: newAmount };
     changeDescription = `сумма → ${newAmount.toFixed(2)} €`;
   } else {
     patch = { note: intent.editValue };
+    sheetEdits = { description: intent.editValue };
     changeDescription = `заметка → «${intent.editValue}»`;
   }
 
@@ -572,7 +592,9 @@ async function handleAgentFallback(ctx: Context, text: string, categories: Categ
     kind: 'edit',
     transactionId: target.id,
     patch,
+    sheetEdits,
     summary: `${summary}\n${changeDescription}`,
+    original,
   });
 
   const keyboard = new InlineKeyboard().text('✅ Исправить', 'agent:confirm').row().text('❌ Отмена', 'agent:cancel');
@@ -723,6 +745,23 @@ bot.on('callback_query:data', async (ctx) => {
       console.error('Failed to apply agent action:', error);
       await ctx.editMessageText('Не получилось применить изменение, попробуй ещё раз.');
       return;
+    }
+
+    const sheetMatch: SheetRowMatch = {
+      type: action.original.type,
+      amount: action.original.amount,
+      description: action.original.description ?? '',
+    };
+
+    // Best-effort: the DB is already the source of truth and the edit/delete
+    // above already succeeded. If the Sheet row can't be uniquely located
+    // (edited again meanwhile, or a duplicate description+amount elsewhere)
+    // this just logs and leaves the Sheet row stale rather than failing the
+    // whole confirmation the user is waiting on.
+    if (action.kind === 'delete') {
+      await deleteTransactionFromSheet(sheetMatch);
+    } else if (action.sheetEdits) {
+      await updateTransactionInSheet(sheetMatch, action.sheetEdits);
     }
 
     const label = action.kind === 'delete' ? '🗑 Удалено' : '✏️ Исправлено';
