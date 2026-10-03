@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { openai } from './client.js';
 import { env } from '../config/env.js';
 import type { Category } from '../types/db.js';
-import { classificationSchema, transactionItemSchema } from './transaction-logic.js';
+import { transactionItemSchema } from './transaction-logic.js';
 
 export type TransactionItem = z.infer<typeof transactionItemSchema>;
 
@@ -35,6 +35,11 @@ function buildSystemPrompt(categories: Category[]): string {
   из одного элемента.
 - Если сообщение вообще не про деньги (приветствие, вопрос, разговор
   ни о чём) — верни "transactions": [] (пустой массив).
+- Если сообщение говорит про УЖЕ существующую операцию — просит исправить
+  категорию/сумму/заметку, удалить запись, или спрашивает про прошлые траты
+  ("ты поставил не ту категорию", "удали запись про X", "сколько я потратил
+  на еду") — это НЕ новая операция. Верни "transactions": [] (пустой
+  массив), даже если в сообщении упомянуты суммы или название покупки.
 - Сообщения обычно короткие и неформальные: "кофе 3.5", "3.5 кофе", "2 чай",
   "такси 12", "кофе 3.5, такси 12". Число рядом с названием покупки —
   это почти всегда сумма операции, а не количество штук. Не отказывайся
@@ -113,5 +118,28 @@ export async function classifyTransactions(text: string, categories: Category[])
     throw new Error('Empty AI response');
   }
 
-  return classificationSchema.parse(JSON.parse(content)).transactions;
+  // Validate item-by-item and drop anything malformed (e.g. amount <= 0,
+  // which OpenAI's own JSON-schema mode doesn't enforce, only our zod
+  // schema does) instead of letting one bad item throw away the whole
+  // message -- a schema failure here used to surface to the user as a
+  // generic "не получилось обработать сообщение", even for messages that
+  // were never meant to be a new transaction (e.g. a correction request the
+  // model misfired on).
+  const raw: unknown = JSON.parse(content);
+  const rawTransactions =
+    raw !== null && typeof raw === 'object' && Array.isArray((raw as { transactions?: unknown }).transactions)
+      ? (raw as { transactions: unknown[] }).transactions
+      : [];
+
+  const valid: TransactionItem[] = [];
+  for (const item of rawTransactions) {
+    const result = transactionItemSchema.safeParse(item);
+    if (result.success) {
+      valid.push(result.data);
+    } else {
+      console.error('classifyTransactions: dropping invalid item:', result.error.message);
+    }
+  }
+
+  return valid;
 }
