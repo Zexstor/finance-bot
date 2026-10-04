@@ -33,7 +33,7 @@ import {
   type MonthlyReport,
 } from '../services/report.js';
 import { isSumMismatched } from '../ai/receipt-logic.js';
-import { truncateForTelegram, formatBalanceLine, formatQueryAnswer } from './format.js';
+import { truncateForTelegram, formatBalanceLine, formatQueryAnswer, formatForecastLines } from './format.js';
 import {
   appendTransactionRow,
   appendTransactionRows,
@@ -116,6 +116,8 @@ bot.command('report', async (ctx) => {
   const balance = report.income - report.totalExpenses;
   const balanceLabel = balance >= 0 ? 'Остаток' : 'Перерасход';
   lines.push('', `${balanceLabel}: ${balance.toFixed(2)} €`);
+
+  lines.push(...formatForecastLines(report.categoryForecasts, report.totalForecast));
 
   await replyText(ctx, lines.join('\n'));
 });
@@ -525,7 +527,10 @@ async function handleAgentFallback(ctx: Context, text: string, categories: Categ
               formatQueryAnswer('эту неделю', r.income, r.totalExpenses, r.expensesByCategory, intent.queryCategory),
             )
           : await getMonthlyReport().then((r) =>
-              formatQueryAnswer('этот месяц', r.income, r.totalExpenses, r.expensesByCategory, intent.queryCategory),
+              formatQueryAnswer('этот месяц', r.income, r.totalExpenses, r.expensesByCategory, intent.queryCategory, {
+                categoryForecasts: r.categoryForecasts,
+                totalForecast: r.totalForecast,
+              }),
             );
       await replyText(ctx, answer);
     } catch (error) {

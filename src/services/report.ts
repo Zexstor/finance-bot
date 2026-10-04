@@ -1,4 +1,5 @@
 import { supabase } from '../db/client.js';
+import { calculateMonthlyForecast } from './forecast-logic.js';
 
 // supabase-js infers to-one embeds as arrays without generated DB types;
 // at runtime PostgREST actually returns a single object (or null) here.
@@ -11,12 +12,18 @@ export interface CategoryTotal {
   total: number;
 }
 
+export interface CategoryForecast extends CategoryTotal {
+  forecast: number;
+}
+
 export interface MonthlyReport {
   monthLabel: string;
   income: number;
   goal: number;
   expensesByCategory: CategoryTotal[];
   totalExpenses: number;
+  categoryForecasts: CategoryForecast[];
+  totalForecast: number;
 }
 
 function getMonthRange(date = new Date()) {
@@ -137,7 +144,9 @@ export async function getMonthlyBalance(): Promise<number> {
 }
 
 export async function getMonthlyReport(): Promise<MonthlyReport> {
-  const { start, end, label } = getMonthRange();
+  const now = new Date();
+  const { start, end, label } = getMonthRange(now);
+  const daysElapsed = now.getDate();
 
   const [incomeResult, expenseResult, goal] = await Promise.all([
     supabase.from('transactions').select('amount').eq('type', 'income').gte('created_at', start).lt('created_at', end),
@@ -172,5 +181,11 @@ export async function getMonthlyReport(): Promise<MonthlyReport> {
 
   const totalExpenses = expensesByCategory.reduce((sum, c) => sum + c.total, 0);
 
-  return { monthLabel: label, income, goal, expensesByCategory, totalExpenses };
+  const categoryForecasts = expensesByCategory.map((c) => ({
+    ...c,
+    forecast: calculateMonthlyForecast(c.total, daysElapsed),
+  }));
+  const totalForecast = calculateMonthlyForecast(totalExpenses, daysElapsed);
+
+  return { monthLabel: label, income, goal, expensesByCategory, totalExpenses, categoryForecasts, totalForecast };
 }

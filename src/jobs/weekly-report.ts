@@ -1,7 +1,7 @@
 import { bot } from '../bot/bot.js';
 import { env } from '../config/env.js';
-import { getWeeklyReport } from '../services/report.js';
-import { truncateForTelegram } from '../bot/format.js';
+import { getWeeklyReport, getMonthlyReport } from '../services/report.js';
+import { truncateForTelegram, formatForecastLines } from '../bot/format.js';
 import { msUntilNextSunday } from './weekly-report-schedule.js';
 
 // Process-local time. The Docker image sets TZ=Europe/Podgorica, so this is
@@ -30,6 +30,16 @@ async function sendWeeklyReport(): Promise<void> {
     }
   } else {
     lines.push('', 'На этой неделе расходов не было.');
+  }
+
+  // Best-effort: the monthly run-rate forecast is a bonus in this weekly
+  // digest, not its purpose -- a failure here shouldn't block the weekly
+  // numbers the user actually waits for every Sunday.
+  try {
+    const monthly = await getMonthlyReport();
+    lines.push(...formatForecastLines(monthly.categoryForecasts, monthly.totalForecast));
+  } catch (error) {
+    console.error('Failed to build monthly forecast for weekly report:', error);
   }
 
   const text = truncateForTelegram(lines.join('\n'));
