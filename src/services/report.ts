@@ -189,7 +189,7 @@ export async function getMonthlyReport(): Promise<MonthlyReport> {
   const plannedBudgets = await getPlannedCategoryBudgets();
   const categoryForecasts = expensesByCategory.map((c) => {
     const runRate = calculateMonthlyForecast(c.total, daysElapsed);
-    const forecast = usesRunRateForecast(c.name) ? runRate : plannedBudgets.get(c.name) ?? runRate;
+    const forecast = usesRunRateForecast(c.name) ? runRate : plannedBudgets.get(c.name.trim().toLowerCase()) ?? runRate;
     return { ...c, forecast };
   });
   const totalForecast = categoryForecasts.reduce((sum, c) => sum + c.forecast, 0);

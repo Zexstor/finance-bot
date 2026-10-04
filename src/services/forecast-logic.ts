@@ -17,15 +17,15 @@ export function calculateMonthlyForecast(spentSoFar: number, daysElapsed: number
 // the month -- for those the user wants to see the fixed planned budget they
 // already keep in the Google Sheets template instead. Decided explicitly
 // per category name (from the user's own instructions), not inferred.
-const RUN_RATE_FORECAST_CATEGORIES = new Set([
-  'Продукты и БХ',
-  'Кафе и рестораны',
-  'Красота и гигиена',
-  'Транспорт',
-  'Бытовая химия',
-  'Другое',
-]);
+// Matched case-insensitively: the DB has "Красота и Гигиена" (capital Г)
+// while the Google Sheets template spells it "Красота и гигиена" -- a
+// case-sensitive match would silently misclassify it.
+const RUN_RATE_FORECAST_CATEGORIES = new Set(
+  ['Продукты и БХ', 'Кафе и рестораны', 'Красота и гигиена', 'Транспорт', 'Бытовая химия', 'Другое'].map((name) =>
+    name.toLowerCase(),
+  ),
+);
 
 export function usesRunRateForecast(categoryName: string): boolean {
-  return RUN_RATE_FORECAST_CATEGORIES.has(categoryName);
+  return RUN_RATE_FORECAST_CATEGORIES.has(categoryName.trim().toLowerCase());
 }

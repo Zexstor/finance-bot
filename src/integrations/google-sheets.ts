@@ -105,7 +105,7 @@ async function findFirstEmptyRow(sheet: GoogleSpreadsheetWorksheet, cols: Templa
   throw new Error('No empty row found in the budget template (sheet is full)');
 }
 
-type RowWithDate = TemplateRowInput & { createdAt: string };
+export type RowWithDate = TemplateRowInput & { createdAt: string };
 
 function writeRowCells(sheet: GoogleSpreadsheetWorksheet, targetRow: number, cols: TemplateColumns, row: RowWithDate): void {
   const values = buildTemplateRowValues(row);
@@ -278,7 +278,10 @@ export async function getPlannedCategoryBudgets(): Promise<Map<string, number>> 
       const name = sheet.getCell(r, SUMMARY_NAME_COL).value;
       const planned = sheet.getCell(r, SUMMARY_PLANNED_COL).value;
       if (typeof name === 'string' && name.trim() && typeof planned === 'number') {
-        budgets.set(name.trim(), planned);
+        // Normalized key: matched case-insensitively by the caller, since
+        // category names aren't guaranteed to match the Sheet's casing
+        // exactly (e.g. DB "Красота и Гигиена" vs Sheet "Красота и гигиена").
+        budgets.set(name.trim().toLowerCase(), planned);
       }
     }
   } catch (error) {

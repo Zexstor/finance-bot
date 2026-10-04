@@ -41,7 +41,9 @@ import {
   deleteTransactionFromSheet,
   type SheetRowMatch,
   type SheetRowEdits,
+  type RowWithDate,
 } from '../integrations/google-sheets.js';
+import { calculateAutoInvestment, AUTO_INVEST_CATEGORY_NAME, AUTO_INVEST_NOTE } from '../services/auto-investment-logic.js';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 
@@ -446,8 +448,10 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
     const icon = result.type === 'income' ? '➕' : '➖';
     const label = result.type === 'income' ? 'Доход' : 'Расход';
     const balanceSuffix = await getBalanceSuffix();
+    const investSuffix =
+      result.type === 'income' ? await autoInvestFromIncome(ctx, result.amount, categories, source) : '';
     await ctx.reply(
-      `${icon} ${label}: ${result.amount.toFixed(2)} € — ${matchedCategory.name} (${result.note || 'без заметки'})${balanceSuffix}`,
+      `${icon} ${label}: ${result.amount.toFixed(2)} € — ${matchedCategory.name} (${result.note || 'без заметки'})${balanceSuffix}${investSuffix}`,
     );
     return;
   }
@@ -801,9 +805,35 @@ bot.on('callback_query:data', async (ctx) => {
     // slow work, not after.
     await ctx.answerCallbackQuery({ text: 'Сохраняю...' });
 
+    let investCategory: Category | undefined;
+    try {
+      investCategory = findInvestmentCategory(await getCategories());
+    } catch (error) {
+      console.error('Failed to load categories for auto-investment:', error);
+    }
+
+    const batchCreatedAt = new Date().toISOString();
+    let totalInvested = 0;
+    const investRows: RowWithDate[] = [];
+
     try {
       for (const item of batch.items) {
         await recordTransaction(ctx.from.id, item.type, item.amount, item.note, item.categoryId, batch.source);
+
+        if (item.type === 'income' && investCategory) {
+          const investAmount = calculateAutoInvestment(item.amount);
+          if (investAmount > 0) {
+            await recordTransaction(ctx.from.id, 'expense', investAmount, AUTO_INVEST_NOTE, investCategory.id, batch.source);
+            investRows.push({
+              type: 'expense',
+              amount: investAmount,
+              categoryName: investCategory.name,
+              note: AUTO_INVEST_NOTE,
+              createdAt: batchCreatedAt,
+            });
+            totalInvested += investAmount;
+          }
+        }
       }
     } catch (error) {
       console.error('Failed to save batch:', error);
@@ -811,19 +841,21 @@ bot.on('callback_query:data', async (ctx) => {
       return;
     }
 
-    const batchCreatedAt = new Date().toISOString();
-    await appendTransactionRows(
-      batch.items.map((item) => ({
+    await appendTransactionRows([
+      ...batch.items.map((item) => ({
         type: item.type,
         amount: item.amount,
         categoryName: item.categoryName,
         note: item.note,
         createdAt: batchCreatedAt,
       })),
-    );
+      ...investRows,
+    ]);
 
     const batchBalanceSuffix = await getBalanceSuffix();
-    await ctx.editMessageText(`✅ Сохранено операций: ${batch.items.length}.${batchBalanceSuffix}`);
+    const investSuffix =
+      totalInvested > 0 ? `\n💰 Автоматически отложено на инвестиции: ${totalInvested.toFixed(2)} €` : '';
+    await ctx.editMessageText(`✅ Сохранено операций: ${batch.items.length}.${batchBalanceSuffix}${investSuffix}`);
     return;
   }
 
@@ -875,12 +907,24 @@ bot.on('callback_query:data', async (ctx) => {
     createdAt: new Date().toISOString(),
   });
 
+  // pendingEntry.categories only holds categories of the matching type (the
+  // ones offered as buttons), which excludes "Инвестиции" for an income
+  // entry -- fetch the full list instead of relying on that subset.
+  let investSuffix = '';
+  if (pendingEntry.type === 'income') {
+    try {
+      investSuffix = await autoInvestFromIncome(ctx, pendingEntry.amount, await getCategories(), pendingEntry.source);
+    } catch (error) {
+      console.error('Failed to load categories for auto-investment:', error);
+    }
+  }
+
   const clarifyBalanceSuffix = await getBalanceSuffix();
   await ctx.answerCallbackQuery();
   const icon = pendingEntry.type === 'income' ? '➕' : '➖';
   const label = pendingEntry.type === 'income' ? 'Доход' : 'Расход';
   await ctx.editMessageText(
-    `${icon} ${label}: ${pendingEntry.amount.toFixed(2)} € — ${categoryName} (${pendingEntry.note || 'без заметки'})${clarifyBalanceSuffix}`,
+    `${icon} ${label}: ${pendingEntry.amount.toFixed(2)} € — ${categoryName} (${pendingEntry.note || 'без заметки'})${clarifyBalanceSuffix}${investSuffix}`,
   );
 });
 
@@ -926,6 +970,54 @@ async function getBalanceSuffix(): Promise<string> {
     console.error('Failed to fetch monthly balance:', error);
     return '';
   }
+}
+
+function findInvestmentCategory(categories: Category[]): Category | undefined {
+  return categories.find((c) => c.type === 'expense' && c.name === AUTO_INVEST_CATEGORY_NAME);
+}
+
+// Every income transaction automatically skims a fixed share straight into
+// "Инвестиции" -- the user wants saving/investing to happen by default
+// rather than depend on remembering to do it by hand. Silently does
+// nothing (just logs) if that category was renamed/deleted, rather than
+// blocking the income transaction the user is actually waiting on.
+async function autoInvestFromIncome(
+  ctx: Context,
+  incomeAmount: number,
+  categories: Category[],
+  source: TransactionSource,
+): Promise<string> {
+  if (!ctx.from) {
+    return '';
+  }
+
+  const investAmount = calculateAutoInvestment(incomeAmount);
+  if (investAmount <= 0) {
+    return '';
+  }
+
+  const investCategory = findInvestmentCategory(categories);
+  if (!investCategory) {
+    console.error(`Auto-investment skipped: category "${AUTO_INVEST_CATEGORY_NAME}" not found`);
+    return '';
+  }
+
+  try {
+    await recordTransaction(ctx.from.id, 'expense', investAmount, AUTO_INVEST_NOTE, investCategory.id, source);
+  } catch (error) {
+    console.error('Failed to record auto-investment transaction:', error);
+    return '';
+  }
+
+  void appendTransactionRow({
+    type: 'expense',
+    amount: investAmount,
+    categoryName: investCategory.name,
+    note: AUTO_INVEST_NOTE,
+    createdAt: new Date().toISOString(),
+  });
+
+  return `\n💰 Автоматически отложено на инвестиции: ${investAmount.toFixed(2)} €`;
 }
 
 function formatTransactionLine(t: TransactionListItem): string {

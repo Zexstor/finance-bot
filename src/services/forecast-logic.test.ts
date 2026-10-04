@@ -38,3 +38,8 @@ test('usesRunRateForecast: fixed/recurring-style categories do not use a run-rat
 test('usesRunRateForecast: an unknown/custom category name defaults to false (falls back to the plan lookup)', () => {
   assert.equal(usesRunRateForecast('Совершенно новая категория'), false);
 });
+
+test('usesRunRateForecast: matches regardless of case (DB has "Гигиена" capitalized, the Sheet does not)', () => {
+  assert.equal(usesRunRateForecast('Красота и Гигиена'), true);
+  assert.equal(usesRunRateForecast('КРАСОТА И ГИГИЕНА'), true);
+});
