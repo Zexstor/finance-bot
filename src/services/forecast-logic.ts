@@ -9,3 +9,23 @@ export function calculateMonthlyForecast(spentSoFar: number, daysElapsed: number
   const safeDays = Math.max(daysElapsed, 1);
   return (spentSoFar / safeDays) * 30;
 }
+
+// Some categories spend roughly evenly across the month (groceries, cafes,
+// transport) -- a run-rate projection is a reasonable estimate for those.
+// Others are closer to a fixed monthly line item (rent-like: gifts,
+// investments, subscriptions) where a run-rate would be misleading early in
+// the month -- for those the user wants to see the fixed planned budget they
+// already keep in the Google Sheets template instead. Decided explicitly
+// per category name (from the user's own instructions), not inferred.
+const RUN_RATE_FORECAST_CATEGORIES = new Set([
+  'Продукты и БХ',
+  'Кафе и рестораны',
+  'Красота и гигиена',
+  'Транспорт',
+  'Бытовая химия',
+  'Другое',
+]);
+
+export function usesRunRateForecast(categoryName: string): boolean {
+  return RUN_RATE_FORECAST_CATEGORIES.has(categoryName);
+}

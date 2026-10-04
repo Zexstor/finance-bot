@@ -1,5 +1,6 @@
 import { supabase } from '../db/client.js';
-import { calculateMonthlyForecast } from './forecast-logic.js';
+import { calculateMonthlyForecast, usesRunRateForecast } from './forecast-logic.js';
+import { getPlannedCategoryBudgets } from '../integrations/google-sheets.js';
 
 // supabase-js infers to-one embeds as arrays without generated DB types;
 // at runtime PostgREST actually returns a single object (or null) here.
@@ -181,11 +182,17 @@ export async function getMonthlyReport(): Promise<MonthlyReport> {
 
   const totalExpenses = expensesByCategory.reduce((sum, c) => sum + c.total, 0);
 
-  const categoryForecasts = expensesByCategory.map((c) => ({
-    ...c,
-    forecast: calculateMonthlyForecast(c.total, daysElapsed),
-  }));
-  const totalForecast = calculateMonthlyForecast(totalExpenses, daysElapsed);
+  // Categories outside the run-rate set use their fixed planned budget from
+  // the Google Sheets template instead of a spend-rate projection; if that
+  // lookup comes back empty (Sheets not configured, name not found, etc.)
+  // fall back to the run-rate so the forecast is never just silently missing.
+  const plannedBudgets = await getPlannedCategoryBudgets();
+  const categoryForecasts = expensesByCategory.map((c) => {
+    const runRate = calculateMonthlyForecast(c.total, daysElapsed);
+    const forecast = usesRunRateForecast(c.name) ? runRate : plannedBudgets.get(c.name) ?? runRate;
+    return { ...c, forecast };
+  });
+  const totalForecast = categoryForecasts.reduce((sum, c) => sum + c.forecast, 0);
 
   return { monthLabel: label, income, goal, expensesByCategory, totalExpenses, categoryForecasts, totalForecast };
 }

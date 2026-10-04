@@ -10,11 +10,14 @@ import {
 } from './sheet-row.js';
 
 const SHEET_TITLE = 'Транзакции';
+const SUMMARY_SHEET_TITLE = 'Сводка';
 const FIRST_DATA_ROW = 4; // 0-indexed; matches where the template's own example rows start
 const MAX_ROW = 999;
 const DATE_FORMAT = { type: 'DATE' as const, pattern: 'DD.MM.YYYY' };
 
+let cachedDoc: GoogleSpreadsheet | null = null;
 let cachedSheet: GoogleSpreadsheetWorksheet | null = null;
+let cachedSummarySheet: GoogleSpreadsheetWorksheet | null = null;
 
 function isConfigured(): boolean {
   return Boolean(
@@ -22,9 +25,9 @@ function isConfigured(): boolean {
   );
 }
 
-async function getSheet(): Promise<GoogleSpreadsheetWorksheet> {
-  if (cachedSheet) {
-    return cachedSheet;
+async function getDoc(): Promise<GoogleSpreadsheet> {
+  if (cachedDoc) {
+    return cachedDoc;
   }
 
   const jwt = new JWT({
@@ -37,12 +40,37 @@ async function getSheet(): Promise<GoogleSpreadsheetWorksheet> {
   const doc = new GoogleSpreadsheet(env.GOOGLE_SHEET_ID as string, jwt);
   await doc.loadInfo();
 
+  cachedDoc = doc;
+  return doc;
+}
+
+async function getSheet(): Promise<GoogleSpreadsheetWorksheet> {
+  if (cachedSheet) {
+    return cachedSheet;
+  }
+
+  const doc = await getDoc();
   const sheet = doc.sheetsByTitle[SHEET_TITLE];
   if (!sheet) {
     throw new Error(`Sheet tab "${SHEET_TITLE}" not found`);
   }
 
   cachedSheet = sheet;
+  return sheet;
+}
+
+async function getSummarySheet(): Promise<GoogleSpreadsheetWorksheet> {
+  if (cachedSummarySheet) {
+    return cachedSummarySheet;
+  }
+
+  const doc = await getDoc();
+  const sheet = doc.sheetsByTitle[SUMMARY_SHEET_TITLE];
+  if (!sheet) {
+    throw new Error(`Sheet tab "${SUMMARY_SHEET_TITLE}" not found`);
+  }
+
+  cachedSummarySheet = sheet;
   return sheet;
 }
 
@@ -213,6 +241,52 @@ export async function updateTransactionInSheet(match: SheetRowMatch, edits: Shee
     const message = error instanceof Error ? error.message : String(error);
     console.error('Failed to update row in Google Sheet:', message);
   }
+}
+
+// The "Сводка" tab's expense block (template layout: name in column B,
+// "Предполагаемые"/planned budget in column D) is where the user manually
+// sets a fixed monthly budget per category -- used as the forecast for
+// categories that don't scale linearly with days elapsed (rent-like
+// categories such as "Подарки" or "Инвестиции"), instead of a computed
+// run-rate. Scanned over a wide row range rather than a hardcoded row list
+// so adding/removing a category row in the template doesn't silently break
+// this; non-numeric/non-string junk rows (section headers, totals) are
+// filtered out by the type checks below, and anything that doesn't match a
+// real category name is simply never looked up.
+const SUMMARY_SCAN_START_ROW = 20;
+const SUMMARY_SCAN_END_ROW = 100;
+const SUMMARY_NAME_COL = 1;
+const SUMMARY_PLANNED_COL = 3;
+
+export async function getPlannedCategoryBudgets(): Promise<Map<string, number>> {
+  const budgets = new Map<string, number>();
+
+  if (!isConfigured()) {
+    return budgets;
+  }
+
+  try {
+    const sheet = await getSummarySheet();
+    await sheet.loadCells({
+      startRowIndex: SUMMARY_SCAN_START_ROW,
+      endRowIndex: SUMMARY_SCAN_END_ROW,
+      startColumnIndex: SUMMARY_NAME_COL,
+      endColumnIndex: SUMMARY_PLANNED_COL + 1,
+    });
+
+    for (let r = SUMMARY_SCAN_START_ROW; r < SUMMARY_SCAN_END_ROW; r++) {
+      const name = sheet.getCell(r, SUMMARY_NAME_COL).value;
+      const planned = sheet.getCell(r, SUMMARY_PLANNED_COL).value;
+      if (typeof name === 'string' && name.trim() && typeof planned === 'number') {
+        budgets.set(name.trim(), planned);
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Failed to read planned category budgets from Google Sheet:', message);
+  }
+
+  return budgets;
 }
 
 export async function deleteTransactionFromSheet(match: SheetRowMatch): Promise<void> {
