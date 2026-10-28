@@ -2,7 +2,7 @@ import { Bot, InlineKeyboard, type Context } from 'grammy';
 import { env } from '../config/env.js';
 import { accessControl } from './access-control.js';
 import { ensureUser } from '../db/users.js';
-import { getCategories, addCategory, deleteCategory, updateCategoryGoal } from '../db/categories.js';
+import { getCategories, addCategory, deleteCategory } from '../db/categories.js';
 import { classifyTransactions } from '../ai/classify-transaction.js';
 import { classifyReceipt, ReceiptTruncatedError } from '../ai/classify-receipt.js';
 import { classifyAgentIntent } from '../ai/classify-agent-intent.js';
@@ -13,8 +13,6 @@ import { setPendingCategoryType, takePendingCategoryType } from './pending-categ
 import { setPendingReceipt, takePendingReceipt, hasPendingReceipt } from './pending-receipts.js';
 import { setPendingBatch, takePendingBatch } from './pending-batch.js';
 import { setPendingAgentAction, takePendingAgentAction } from './pending-agent-action.js';
-import { setPendingCategoryGoalInput, takePendingCategoryGoalInput } from './pending-category-goal-input.js';
-import { parseCategoryGoalInput } from '../services/category-goal-logic.js';
 import { uploadReceiptImage, deleteReceiptImage } from '../db/storage.js';
 import { saveReceipt } from '../db/receipts.js';
 import type { Category, TransactionType, TransactionSource } from '../types/db.js';
@@ -192,30 +190,6 @@ bot.on('message:text', async (ctx) => {
   const text = ctx.message.text;
 
   if (text.startsWith('/')) {
-    return;
-  }
-
-  const pendingGoalCategoryId = takePendingCategoryGoalInput(ctx.from.id);
-
-  if (pendingGoalCategoryId !== null) {
-    const parsed = parseCategoryGoalInput(text);
-
-    if (!parsed.ok) {
-      await ctx.reply('Нужно прислать число (например, 150 или 0, чтобы убрать цель).');
-      return;
-    }
-
-    try {
-      await updateCategoryGoal(pendingGoalCategoryId, parsed.goal);
-    } catch (error) {
-      console.error('Failed to update category goal:', error);
-      await ctx.reply('Не получилось сохранить цель, попробуй ещё раз.');
-      return;
-    }
-
-    await ctx.reply(
-      parsed.goal === null ? '✅ Цель убрана, прогноз снова по темпу трат.' : `✅ Цель на месяц: ${parsed.goal} €`,
-    );
     return;
   }
 
@@ -684,14 +658,6 @@ bot.on('callback_query:data', async (ctx) => {
     return;
   }
 
-  if (data.startsWith('goal:')) {
-    const id = Number(data.replace('goal:', ''));
-    setPendingCategoryGoalInput(ctx.from.id, id);
-    await ctx.answerCallbackQuery();
-    await ctx.reply('Напиши месячную цель по этой категории числом (например, 150). Пришли 0, чтобы убрать цель.');
-    return;
-  }
-
   if (data.startsWith('addcat:')) {
     const type = data.replace('addcat:', '') as TransactionType;
     setPendingCategoryType(ctx.from.id, type);
@@ -991,8 +957,7 @@ function buildCategoriesKeyboard(categories: Category[]): InlineKeyboard {
 
   keyboard.text('— Расходы —', 'noop').row();
   for (const category of expense) {
-    const goalLabel = category.monthly_goal ? `🎯 ${category.monthly_goal} €` : '🎯 Цель';
-    keyboard.text(`🗑 ${category.name}`, `delcat:${category.id}`).text(goalLabel, `goal:${category.id}`).row();
+    keyboard.text(`🗑 ${category.name}`, `delcat:${category.id}`).row();
   }
   keyboard.text('➕ Добавить расходную', 'addcat:expense').row();
 

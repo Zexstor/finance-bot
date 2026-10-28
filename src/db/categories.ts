@@ -5,7 +5,7 @@ const UNIQUE_VIOLATION = '23505';
 const FOREIGN_KEY_VIOLATION = '23503';
 
 export async function getCategories(): Promise<Category[]> {
-  const { data, error } = await supabase.from('categories').select('id, name, type, monthly_goal').order('id');
+  const { data, error } = await supabase.from('categories').select('id, name, type').order('id');
 
   if (error) {
     throw error;
@@ -14,23 +14,11 @@ export async function getCategories(): Promise<Category[]> {
   return data;
 }
 
-export async function updateCategoryGoal(id: number, goal: number | null): Promise<void> {
-  const { error } = await supabase.from('categories').update({ monthly_goal: goal }).eq('id', id);
-
-  if (error) {
-    throw error;
-  }
-}
-
 export async function addCategory(
   name: string,
   type: TransactionType,
 ): Promise<{ ok: true; category: Category } | { ok: false; reason: 'duplicate' }> {
-  const { data, error } = await supabase
-    .from('categories')
-    .insert({ name, type })
-    .select('id, name, type, monthly_goal')
-    .single();
+  const { data, error } = await supabase.from('categories').insert({ name, type }).select('id, name, type').single();
 
   if (error) {
     if (error.code === UNIQUE_VIOLATION) {
