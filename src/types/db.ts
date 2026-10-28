@@ -11,6 +11,7 @@ export interface Category {
   id: number;
   name: string;
   type: TransactionType;
+  monthly_goal: number | null;
 }
 
 export interface Transaction {
