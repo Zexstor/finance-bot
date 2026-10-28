@@ -144,6 +144,10 @@ bot.command('setgoal', async (ctx) => {
 });
 
 bot.command('undo', async (ctx) => {
+  if (!ctx.from) {
+    return;
+  }
+
   let removed;
 
   try {
@@ -161,9 +165,9 @@ bot.command('undo', async (ctx) => {
 
   const icon = removed.type === 'income' ? '➕' : '➖';
   const label = removed.type === 'income' ? 'доход' : 'расход';
-  await ctx.reply(
-    `↩️ Удалил последний ${label}: ${icon} ${removed.amount.toFixed(2)} € — ${removed.description || 'без заметки'} (${removed.authorName})`,
-  );
+  const undoText = `↩️ Удалил последний ${label}: ${icon} ${removed.amount.toFixed(2)} € — ${removed.description || 'без заметки'} (${removed.authorName})`;
+  await ctx.reply(undoText);
+  void notifyOtherUsers(ctx, `👤 ${ctx.from.first_name}:\n${undoText}`);
 });
 
 bot.command('categories', async (ctx) => {
@@ -450,9 +454,9 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
     const balanceSuffix = await getBalanceSuffix();
     const investSuffix =
       result.type === 'income' ? await autoInvestFromIncome(ctx, result.amount, categories, source) : '';
-    await ctx.reply(
-      `${icon} ${label}: ${result.amount.toFixed(2)} € — ${matchedCategory.name} (${result.note || 'без заметки'})${balanceSuffix}${investSuffix}`,
-    );
+    const confirmText = `${icon} ${label}: ${result.amount.toFixed(2)} € — ${matchedCategory.name} (${result.note || 'без заметки'})${balanceSuffix}${investSuffix}`;
+    await ctx.reply(confirmText);
+    void notifyOtherUsers(ctx, `👤 ${ctx.from.first_name} записал:\n${confirmText}`);
     return;
   }
 
@@ -731,6 +735,15 @@ bot.on('callback_query:data', async (ctx) => {
 
     const receiptBalanceSuffix = await getBalanceSuffix();
     await ctx.editMessageText(`✅ Чек сохранён.${receiptBalanceSuffix}`);
+
+    const receiptItemLines = pendingReceipt.items.map(
+      (item) => `➖ ${item.name} — ${item.amount.toFixed(2)} € — ${item.categoryName ?? 'Без категории'}`,
+    );
+    const storeLabel = pendingReceipt.storeName ? ` (${pendingReceipt.storeName})` : '';
+    void notifyOtherUsers(
+      ctx,
+      [`👤 ${ctx.from.first_name} сохранил чек${storeLabel}:`, ...receiptItemLines].join('\n'),
+    );
     return;
   }
 
@@ -782,7 +795,9 @@ bot.on('callback_query:data', async (ctx) => {
     }
 
     const label = action.kind === 'delete' ? '🗑 Удалено' : '✏️ Исправлено';
-    await ctx.editMessageText(`${label}:\n${action.summary}`);
+    const agentConfirmText = `${label}:\n${action.summary}`;
+    await ctx.editMessageText(agentConfirmText);
+    void notifyOtherUsers(ctx, `👤 ${ctx.from.first_name}:\n${agentConfirmText}`);
     return;
   }
 
@@ -856,6 +871,13 @@ bot.on('callback_query:data', async (ctx) => {
     const investSuffix =
       totalInvested > 0 ? `\n💰 Автоматически отложено на инвестиции: ${totalInvested.toFixed(2)} €` : '';
     await ctx.editMessageText(`✅ Сохранено операций: ${batch.items.length}.${batchBalanceSuffix}${investSuffix}`);
+
+    const batchItemLines = batch.items.map((item) => {
+      const itemIcon = item.type === 'income' ? '➕' : '➖';
+      const itemLabel = item.categoryName ?? 'Без категории';
+      return `${itemIcon} ${item.amount.toFixed(2)} € — ${itemLabel} (${item.note || 'без заметки'})`;
+    });
+    void notifyOtherUsers(ctx, [`👤 ${ctx.from.first_name} записал:`, ...batchItemLines].join('\n'));
     return;
   }
 
@@ -923,9 +945,9 @@ bot.on('callback_query:data', async (ctx) => {
   await ctx.answerCallbackQuery();
   const icon = pendingEntry.type === 'income' ? '➕' : '➖';
   const label = pendingEntry.type === 'income' ? 'Доход' : 'Расход';
-  await ctx.editMessageText(
-    `${icon} ${label}: ${pendingEntry.amount.toFixed(2)} € — ${categoryName} (${pendingEntry.note || 'без заметки'})${clarifyBalanceSuffix}${investSuffix}`,
-  );
+  const clarifyConfirmText = `${icon} ${label}: ${pendingEntry.amount.toFixed(2)} € — ${categoryName} (${pendingEntry.note || 'без заметки'})${clarifyBalanceSuffix}${investSuffix}`;
+  await ctx.editMessageText(clarifyConfirmText);
+  void notifyOtherUsers(ctx, `👤 ${ctx.from.first_name} записал:\n${clarifyConfirmText}`);
 });
 
 function buildCategoriesKeyboard(categories: Category[]): InlineKeyboard {
@@ -969,6 +991,30 @@ async function getBalanceSuffix(): Promise<string> {
   } catch (error) {
     console.error('Failed to fetch monthly balance:', error);
     return '';
+  }
+}
+
+// Both family members use this bot independently, in their own private
+// chats -- without this, neither one sees what the other just recorded, so
+// they end up asking each other "did you already log that?" and
+// occasionally double-entering the same purchase. Mirrors every successful
+// save to the other allowed user(s), best-effort (a delivery failure here
+// must never roll back or block the save that already happened).
+async function notifyOtherUsers(ctx: Context, text: string): Promise<void> {
+  if (!ctx.from) {
+    return;
+  }
+
+  const authorId = ctx.from.id;
+  for (const userId of env.ALLOWED_USER_IDS) {
+    if (userId === authorId) {
+      continue;
+    }
+    try {
+      await bot.api.sendMessage(userId, truncateForTelegram(text));
+    } catch (error) {
+      console.error(`Failed to notify user ${userId}:`, error);
+    }
   }
 }
 
