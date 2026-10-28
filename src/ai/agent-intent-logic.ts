@@ -24,7 +24,7 @@ export interface RecentTransactionForPrompt {
   created_at: string;
 }
 
-export function formatRecentTransactionsForPrompt(items: RecentTransactionForPrompt[]): string {
+export function formatRecentTransactionsForPrompt(items: RecentTransactionForPrompt[], currency = '€'): string {
   if (items.length === 0) {
     return '(нет недавних операций)';
   }
@@ -35,7 +35,7 @@ export function formatRecentTransactionsForPrompt(items: RecentTransactionForPro
       const typeLabel = t.type === 'income' ? 'доход' : 'расход';
       const category = t.categoryName ?? 'без категории';
       const note = t.description || 'без заметки';
-      return `id=${t.id} | ${date} | ${typeLabel} | ${t.amount.toFixed(2)} € | ${category} | ${note}`;
+      return `id=${t.id} | ${date} | ${typeLabel} | ${t.amount.toFixed(2)} ${currency} | ${category} | ${note}`;
     })
     .join('\n');
 }

@@ -35,7 +35,13 @@ import {
   type MonthlyReport,
 } from '../services/report.js';
 import { isSumMismatched } from '../ai/receipt-logic.js';
-import { truncateForTelegram, formatBalanceLine, formatQueryAnswer, formatForecastLines } from './format.js';
+import {
+  truncateForTelegram,
+  formatBalanceLine,
+  formatQueryAnswer,
+  formatForecastLines,
+  formatIncomeGoalLines,
+} from './format.js';
 import {
   appendTransactionRow,
   appendTransactionRows,
@@ -94,16 +100,16 @@ bot.command('report', async (ctx) => {
 
   if (report.goal > 0) {
     const percent = Math.round((report.income / report.goal) * 100);
-    lines.push(`Доход: ${report.income.toFixed(2)} € из цели ${report.goal.toFixed(2)} € (${percent}%)`);
+    lines.push(`Доход: ${report.income.toFixed(2)} ${env.CURRENCY_SYMBOL} из цели ${report.goal.toFixed(2)} ${env.CURRENCY_SYMBOL} (${percent}%)`);
 
     const remaining = report.goal - report.income;
     if (remaining > 0) {
-      lines.push(`До цели не хватает: ${remaining.toFixed(2)} €`);
+      lines.push(`До цели не хватает: ${remaining.toFixed(2)} ${env.CURRENCY_SYMBOL}`);
     } else {
-      lines.push(`Цель перевыполнена на: ${Math.abs(remaining).toFixed(2)} €`);
+      lines.push(`Цель перевыполнена на: ${Math.abs(remaining).toFixed(2)} ${env.CURRENCY_SYMBOL}`);
     }
   } else {
-    lines.push(`Доход: ${report.income.toFixed(2)} € (цель не задана — /setgoal сумма)`);
+    lines.push(`Доход: ${report.income.toFixed(2)} ${env.CURRENCY_SYMBOL} (цель не задана — /setgoal сумма)`);
   }
 
   lines.push('', 'Расходы по категориям:');
@@ -112,16 +118,17 @@ bot.command('report', async (ctx) => {
     lines.push('пока нет расходов за этот месяц');
   } else {
     for (const category of report.expensesByCategory) {
-      lines.push(`➖ ${category.name}: ${category.total.toFixed(2)} €`);
+      lines.push(`➖ ${category.name}: ${category.total.toFixed(2)} ${env.CURRENCY_SYMBOL}`);
     }
-    lines.push(`Итого расходов: ${report.totalExpenses.toFixed(2)} €`);
+    lines.push(`Итого расходов: ${report.totalExpenses.toFixed(2)} ${env.CURRENCY_SYMBOL}`);
   }
 
   const balance = report.income - report.totalExpenses;
   const balanceLabel = balance >= 0 ? 'Остаток' : 'Перерасход';
-  lines.push('', `${balanceLabel}: ${balance.toFixed(2)} €`);
+  lines.push('', `${balanceLabel}: ${balance.toFixed(2)} ${env.CURRENCY_SYMBOL}`);
 
-  lines.push(...formatForecastLines(report.categoryForecasts, report.totalForecast));
+  lines.push(...formatForecastLines(report.categoryForecasts, report.totalForecast, env.CURRENCY_SYMBOL));
+  lines.push(...formatIncomeGoalLines(report.incomeCategoryForecasts, env.CURRENCY_SYMBOL));
 
   await replyText(ctx, lines.join('\n'));
 });
@@ -142,7 +149,7 @@ bot.command('setgoal', async (ctx) => {
     return;
   }
 
-  await ctx.reply(`✅ Цель на месяц: ${amount.toFixed(2)} €`);
+  await ctx.reply(`✅ Цель на месяц: ${amount.toFixed(2)} ${env.CURRENCY_SYMBOL}`);
 });
 
 bot.command('undo', async (ctx) => {
@@ -167,7 +174,7 @@ bot.command('undo', async (ctx) => {
 
   const icon = removed.type === 'income' ? '➕' : '➖';
   const label = removed.type === 'income' ? 'доход' : 'расход';
-  const undoText = `↩️ Удалил последний ${label}: ${icon} ${removed.amount.toFixed(2)} € — ${removed.description || 'без заметки'} (${removed.authorName})`;
+  const undoText = `↩️ Удалил последний ${label}: ${icon} ${removed.amount.toFixed(2)} ${env.CURRENCY_SYMBOL} — ${removed.description || 'без заметки'} (${removed.authorName})`;
   await ctx.reply(undoText);
   void notifyOtherUsers(ctx, `👤 ${ctx.from.first_name}:\n${undoText}`);
 });
@@ -214,7 +221,7 @@ bot.on('message:text', async (ctx) => {
     }
 
     await ctx.reply(
-      parsed.goal === null ? '✅ Цель убрана, прогноз снова по темпу трат.' : `✅ Цель на месяц: ${parsed.goal} €`,
+      parsed.goal === null ? '✅ Цель убрана, прогноз снова по темпу трат.' : `✅ Цель на месяц: ${parsed.goal} ${env.CURRENCY_SYMBOL}`,
     );
     return;
   }
@@ -359,13 +366,13 @@ bot.on('message:photo', async (ctx) => {
   const itemsSum = items.reduce((sum, item) => sum + item.amount, 0);
   const lines = [`🧾 Чек: ${parsed.store ?? 'не определён'}`];
   if (parsed.total !== null) {
-    lines.push(`Итого на чеке: ${parsed.total.toFixed(2)} €`);
+    lines.push(`Итого на чеке: ${parsed.total.toFixed(2)} ${env.CURRENCY_SYMBOL}`);
   }
   lines.push('');
   for (const item of items) {
-    lines.push(`➖ ${item.name} — ${item.amount.toFixed(2)} € — ${item.categoryName ?? 'Без категории'}`);
+    lines.push(`➖ ${item.name} — ${item.amount.toFixed(2)} ${env.CURRENCY_SYMBOL} — ${item.categoryName ?? 'Без категории'}`);
   }
-  lines.push('', `Сумма позиций: ${itemsSum.toFixed(2)} €`);
+  lines.push('', `Сумма позиций: ${itemsSum.toFixed(2)} ${env.CURRENCY_SYMBOL}`);
 
   const sumMismatch = isSumMismatched(itemsSum, parsed.total);
   if (sumMismatch) {
@@ -423,8 +430,8 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
     return;
   }
 
-  if (transactions.some((t) => t.currency !== 'EUR')) {
-    await ctx.reply('Пиши суммы в евро, попробуй ещё раз.');
+  if (transactions.some((t) => t.currency !== env.CURRENCY_CODE)) {
+    await ctx.reply(`Пиши суммы в ${env.CURRENCY_NAME}, попробуй ещё раз.`);
     return;
   }
 
@@ -453,7 +460,7 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
 
       const label = result.type === 'income' ? 'Доход' : 'Расход';
       await ctx.reply(
-        `Не уверен с категорией. ${label}: ${result.amount.toFixed(2)} € — ${result.note || 'без заметки'}. Выбери категорию:`,
+        `Не уверен с категорией. ${label}: ${result.amount.toFixed(2)} ${env.CURRENCY_SYMBOL} — ${result.note || 'без заметки'}. Выбери категорию:`,
         { reply_markup: keyboard },
       );
       return;
@@ -480,7 +487,7 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
     const balanceSuffix = await getBalanceSuffix();
     const investSuffix =
       result.type === 'income' ? await autoInvestFromIncome(ctx, result.amount, categories, source) : '';
-    const confirmText = `${icon} ${label}: ${result.amount.toFixed(2)} € — ${matchedCategory.name} (${result.note || 'без заметки'})${balanceSuffix}${investSuffix}`;
+    const confirmText = `${icon} ${label}: ${result.amount.toFixed(2)} ${env.CURRENCY_SYMBOL} — ${matchedCategory.name} (${result.note || 'без заметки'})${balanceSuffix}${investSuffix}`;
     await ctx.reply(confirmText);
     void notifyOtherUsers(ctx, `👤 ${ctx.from.first_name} записал:\n${confirmText}`);
     return;
@@ -504,7 +511,7 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
   for (const item of resolvedItems) {
     const icon = item.type === 'income' ? '➕' : '➖';
     const label = item.categoryName ?? 'Без категории';
-    lines.push(`${icon} ${item.amount.toFixed(2)} € — ${label} (${item.note || 'без заметки'})`);
+    lines.push(`${icon} ${item.amount.toFixed(2)} ${env.CURRENCY_SYMBOL} — ${label} (${item.note || 'без заметки'})`);
   }
   lines.push('', 'Сохранить всё?');
 
@@ -516,7 +523,7 @@ const CANT_PARSE_MESSAGE = 'Не понял, это про деньги? Опи�
 
 function formatTargetSummary(t: TransactionListItem): string {
   const icon = t.type === 'income' ? '➕' : '➖';
-  return `${icon} ${t.amount.toFixed(2)} € — ${t.categoryName ?? 'без категории'} (${t.description || 'без заметки'})`;
+  return `${icon} ${t.amount.toFixed(2)} ${env.CURRENCY_SYMBOL} — ${t.categoryName ?? 'без категории'} (${t.description || 'без заметки'})`;
 }
 
 // Runs when the text classifier found no transaction in the message at all.
@@ -558,13 +565,26 @@ async function handleAgentFallback(ctx: Context, text: string, categories: Categ
       const answer =
         period === 'week'
           ? await getWeeklyReport().then((r) =>
-              formatQueryAnswer('эту неделю', r.income, r.totalExpenses, r.expensesByCategory, intent.queryCategory),
+              formatQueryAnswer(
+                'эту неделю',
+                r.income,
+                r.totalExpenses,
+                r.expensesByCategory,
+                intent.queryCategory,
+                undefined,
+                env.CURRENCY_SYMBOL,
+              ),
             )
           : await getMonthlyReport().then((r) =>
-              formatQueryAnswer('этот месяц', r.income, r.totalExpenses, r.expensesByCategory, intent.queryCategory, {
-                categoryForecasts: r.categoryForecasts,
-                totalForecast: r.totalForecast,
-              }),
+              formatQueryAnswer(
+                'этот месяц',
+                r.income,
+                r.totalExpenses,
+                r.expensesByCategory,
+                intent.queryCategory,
+                { categoryForecasts: r.categoryForecasts, totalForecast: r.totalForecast },
+                env.CURRENCY_SYMBOL,
+              ),
             );
       await replyText(ctx, answer);
     } catch (error) {
@@ -627,7 +647,7 @@ async function handleAgentFallback(ctx: Context, text: string, categories: Categ
     }
     patch = { amount: newAmount };
     sheetEdits = { amount: newAmount };
-    changeDescription = `сумма → ${newAmount.toFixed(2)} €`;
+    changeDescription = `сумма → ${newAmount.toFixed(2)} ${env.CURRENCY_SYMBOL}`;
   } else {
     patch = { note: intent.editValue };
     sheetEdits = { description: intent.editValue };
@@ -771,7 +791,7 @@ bot.on('callback_query:data', async (ctx) => {
     await ctx.editMessageText(`✅ Чек сохранён.${receiptBalanceSuffix}`);
 
     const receiptItemLines = pendingReceipt.items.map(
-      (item) => `➖ ${item.name} — ${item.amount.toFixed(2)} € — ${item.categoryName ?? 'Без категории'}`,
+      (item) => `➖ ${item.name} — ${item.amount.toFixed(2)} ${env.CURRENCY_SYMBOL} — ${item.categoryName ?? 'Без категории'}`,
     );
     const storeLabel = pendingReceipt.storeName ? ` (${pendingReceipt.storeName})` : '';
     void notifyOtherUsers(
@@ -903,13 +923,13 @@ bot.on('callback_query:data', async (ctx) => {
 
     const batchBalanceSuffix = await getBalanceSuffix();
     const investSuffix =
-      totalInvested > 0 ? `\n💰 Автоматически отложено на инвестиции: ${totalInvested.toFixed(2)} €` : '';
+      totalInvested > 0 ? `\n💰 Автоматически отложено на инвестиции: ${totalInvested.toFixed(2)} ${env.CURRENCY_SYMBOL}` : '';
     await ctx.editMessageText(`✅ Сохранено операций: ${batch.items.length}.${batchBalanceSuffix}${investSuffix}`);
 
     const batchItemLines = batch.items.map((item) => {
       const itemIcon = item.type === 'income' ? '➕' : '➖';
       const itemLabel = item.categoryName ?? 'Без категории';
-      return `${itemIcon} ${item.amount.toFixed(2)} € — ${itemLabel} (${item.note || 'без заметки'})`;
+      return `${itemIcon} ${item.amount.toFixed(2)} ${env.CURRENCY_SYMBOL} — ${itemLabel} (${item.note || 'без заметки'})`;
     });
     void notifyOtherUsers(ctx, [`👤 ${ctx.from.first_name} записал:`, ...batchItemLines].join('\n'));
     return;
@@ -979,7 +999,7 @@ bot.on('callback_query:data', async (ctx) => {
   await ctx.answerCallbackQuery();
   const icon = pendingEntry.type === 'income' ? '➕' : '➖';
   const label = pendingEntry.type === 'income' ? 'Доход' : 'Расход';
-  const clarifyConfirmText = `${icon} ${label}: ${pendingEntry.amount.toFixed(2)} € — ${categoryName} (${pendingEntry.note || 'без заметки'})${clarifyBalanceSuffix}${investSuffix}`;
+  const clarifyConfirmText = `${icon} ${label}: ${pendingEntry.amount.toFixed(2)} ${env.CURRENCY_SYMBOL} — ${categoryName} (${pendingEntry.note || 'без заметки'})${clarifyBalanceSuffix}${investSuffix}`;
   await ctx.editMessageText(clarifyConfirmText);
   void notifyOtherUsers(ctx, `👤 ${ctx.from.first_name} записал:\n${clarifyConfirmText}`);
 });
@@ -991,14 +1011,15 @@ function buildCategoriesKeyboard(categories: Category[]): InlineKeyboard {
 
   keyboard.text('— Расходы —', 'noop').row();
   for (const category of expense) {
-    const goalLabel = category.monthly_goal ? `🎯 ${category.monthly_goal} €` : '🎯 Цель';
+    const goalLabel = category.monthly_goal ? `🎯 ${category.monthly_goal} ${env.CURRENCY_SYMBOL}` : '🎯 Цель';
     keyboard.text(`🗑 ${category.name}`, `delcat:${category.id}`).text(goalLabel, `goal:${category.id}`).row();
   }
   keyboard.text('➕ Добавить расходную', 'addcat:expense').row();
 
   keyboard.text('— Доходы —', 'noop').row();
   for (const category of income) {
-    keyboard.text(`🗑 ${category.name}`, `delcat:${category.id}`).row();
+    const goalLabel = category.monthly_goal ? `🎯 ${category.monthly_goal} ${env.CURRENCY_SYMBOL}` : '🎯 Цель';
+    keyboard.text(`🗑 ${category.name}`, `delcat:${category.id}`).text(goalLabel, `goal:${category.id}`).row();
   }
   keyboard.text('➕ Добавить доходную', 'addcat:income');
 
@@ -1022,7 +1043,7 @@ async function replyText(
 async function getBalanceSuffix(): Promise<string> {
   try {
     const balance = await getMonthlyBalance();
-    return `\n\n${formatBalanceLine(balance)}`;
+    return `\n\n${formatBalanceLine(balance, env.CURRENCY_SYMBOL)}`;
   } catch (error) {
     console.error('Failed to fetch monthly balance:', error);
     return '';
@@ -1098,7 +1119,7 @@ async function autoInvestFromIncome(
     createdAt: new Date().toISOString(),
   });
 
-  return `\n💰 Автоматически отложено на инвестиции: ${investAmount.toFixed(2)} €`;
+  return `\n💰 Автоматически отложено на инвестиции: ${investAmount.toFixed(2)} ${env.CURRENCY_SYMBOL}`;
 }
 
 function formatTransactionLine(t: TransactionListItem): string {
@@ -1106,5 +1127,5 @@ function formatTransactionLine(t: TransactionListItem): string {
   const icon = t.type === 'income' ? '➕' : '➖';
   const amount = t.amount.toFixed(2);
   const label = t.categoryName ?? (t.description || '—');
-  return `${date} ${icon} ${amount} € — ${label} (${t.authorName})`;
+  return `${date} ${icon} ${amount} ${env.CURRENCY_SYMBOL} — ${label} (${t.authorName})`;
 }

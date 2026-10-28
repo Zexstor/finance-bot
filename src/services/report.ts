@@ -25,6 +25,7 @@ export interface MonthlyReport {
   totalExpenses: number;
   categoryForecasts: CategoryForecast[];
   totalForecast: number;
+  incomeCategoryForecasts: CategoryForecast[];
 }
 
 function getMonthRange(date = new Date()) {
@@ -150,7 +151,13 @@ export async function getMonthlyReport(): Promise<MonthlyReport> {
   const daysElapsed = now.getDate();
 
   const [incomeResult, expenseResult, goal, categories] = await Promise.all([
-    supabase.from('transactions').select('amount').eq('type', 'income').gte('created_at', start).lt('created_at', end),
+    supabase
+      .from('transactions')
+      .select('amount, category:categories(id, name)')
+      .eq('type', 'income')
+      .gte('created_at', start)
+      .lt('created_at', end)
+      .returns<{ amount: number; category: { id: number; name: string } | null }[]>(),
     supabase
       .from('transactions')
       .select('amount, category:categories(id, name)')
@@ -170,6 +177,13 @@ export async function getMonthlyReport(): Promise<MonthlyReport> {
   }
 
   const income = (incomeResult.data ?? []).reduce((sum, row) => sum + Number(row.amount), 0);
+
+  const earnedByCategoryId = new Map<number, number>();
+  for (const row of incomeResult.data ?? []) {
+    if (row.category) {
+      earnedByCategoryId.set(row.category.id, (earnedByCategoryId.get(row.category.id) ?? 0) + Number(row.amount));
+    }
+  }
 
   const byCategory = new Map<string, number>();
   const spentByCategoryId = new Map<number, number>();
@@ -202,5 +216,26 @@ export async function getMonthlyReport(): Promise<MonthlyReport> {
     .sort((a, b) => b.forecast - a.forecast);
   const totalForecast = categoryForecasts.reduce((sum, c) => sum + c.forecast, 0);
 
-  return { monthLabel: label, income, goal, expensesByCategory, totalExpenses, categoryForecasts, totalForecast };
+  // Income doesn't have a meaningful "run rate" fallback the way expenses
+  // do (a salary paid once a month isn't linear across days elapsed), so
+  // only categories with an explicit goal show up here at all.
+  const incomeCategoryForecasts = categories
+    .filter((c) => c.type === 'income' && c.monthly_goal !== null)
+    .map((c) => ({
+      name: c.name,
+      total: earnedByCategoryId.get(c.id) ?? 0,
+      forecast: c.monthly_goal as number,
+    }))
+    .sort((a, b) => b.forecast - a.forecast);
+
+  return {
+    monthLabel: label,
+    income,
+    goal,
+    expensesByCategory,
+    totalExpenses,
+    categoryForecasts,
+    totalForecast,
+    incomeCategoryForecasts,
+  };
 }

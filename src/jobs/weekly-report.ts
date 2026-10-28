@@ -1,7 +1,7 @@
 import { bot } from '../bot/bot.js';
 import { env } from '../config/env.js';
 import { getWeeklyReport, getMonthlyReport } from '../services/report.js';
-import { truncateForTelegram, formatForecastLines } from '../bot/format.js';
+import { truncateForTelegram, formatForecastLines, formatIncomeGoalLines } from '../bot/format.js';
 import { msUntilNextSunday } from './weekly-report-schedule.js';
 
 // Process-local time. The Docker image sets TZ=Europe/Podgorica, so this is
@@ -18,15 +18,15 @@ async function sendWeeklyReport(): Promise<void> {
   }
 
   const lines = ['🗓 Еженедельный отчёт', ''];
-  lines.push(`Доход за неделю: ${report.income.toFixed(2)} €`);
-  lines.push(`Расход за неделю: ${report.totalExpenses.toFixed(2)} €`);
+  lines.push(`Доход за неделю: ${report.income.toFixed(2)} ${env.CURRENCY_SYMBOL}`);
+  lines.push(`Расход за неделю: ${report.totalExpenses.toFixed(2)} ${env.CURRENCY_SYMBOL}`);
   const balanceLabel = report.balance >= 0 ? 'Остаток' : 'Перерасход';
-  lines.push(`${balanceLabel}: ${report.balance.toFixed(2)} €`);
+  lines.push(`${balanceLabel}: ${report.balance.toFixed(2)} ${env.CURRENCY_SYMBOL}`);
 
   if (report.expensesByCategory.length > 0) {
     lines.push('', 'Расходы по категориям:');
     for (const category of report.expensesByCategory) {
-      lines.push(`➖ ${category.name}: ${category.total.toFixed(2)} €`);
+      lines.push(`➖ ${category.name}: ${category.total.toFixed(2)} ${env.CURRENCY_SYMBOL}`);
     }
   } else {
     lines.push('', 'На этой неделе расходов не было.');
@@ -37,7 +37,8 @@ async function sendWeeklyReport(): Promise<void> {
   // numbers the user actually waits for every Sunday.
   try {
     const monthly = await getMonthlyReport();
-    lines.push(...formatForecastLines(monthly.categoryForecasts, monthly.totalForecast));
+    lines.push(...formatForecastLines(monthly.categoryForecasts, monthly.totalForecast, env.CURRENCY_SYMBOL));
+    lines.push(...formatIncomeGoalLines(monthly.incomeCategoryForecasts, env.CURRENCY_SYMBOL));
   } catch (error) {
     console.error('Failed to build monthly forecast for weekly report:', error);
   }

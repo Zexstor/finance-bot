@@ -23,6 +23,17 @@ const envSchema = z.object({
   OPENAI_MODEL: z.string().min(1).default('gpt-4o-mini'),
   OPENAI_RECEIPT_MODEL: z.string().min(1).default('gpt-4o'),
 
+  // Display currency symbol, e.g. "€" or "₽" -- purely cosmetic, doesn't
+  // affect amounts or AI parsing.
+  CURRENCY_SYMBOL: z.string().min(1).default('€'),
+  // ISO code the AI defaults to when a message doesn't name a currency, and
+  // the one actual transactions are required to match (anything else gets
+  // rejected with a "write amounts in <CURRENCY_NAME>" reply).
+  CURRENCY_CODE: z.string().min(1).default('EUR'),
+  // Declined for use in "Пиши суммы в {CURRENCY_NAME}" -- "евро" (EUR) or
+  // "рублях" (RUB).
+  CURRENCY_NAME: z.string().min(1).default('евро'),
+
   // Optional: Google Sheets live sync. If any of these three are missing,
   // the sync is silently skipped — the bot works fully without it.
   GOOGLE_SERVICE_ACCOUNT_EMAIL: z.string().min(1).optional(),

@@ -54,7 +54,7 @@ function buildPrompt(categories: Category[], recent: RecentTransactionForPrompt[
 Категории доходов: ${incomeNames}.
 
 Последние операции пользователя (от новых к старым):
-${formatRecentTransactionsForPrompt(recent)}`;
+${formatRecentTransactionsForPrompt(recent, env.CURRENCY_SYMBOL)}`;
 }
 
 export async function classifyAgentIntent(

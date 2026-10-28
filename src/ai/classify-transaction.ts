@@ -48,7 +48,7 @@ function buildSystemPrompt(categories: Category[]): string {
   (зарплата, премия, подарок получен и т.п.). По умолчанию, если не ясно — "expense".
 - "amount": сумма операции числом, без символов валюты.
 - "currency": трёхбуквенный код валюты, если явно упомянута (USD, RUB...).
-  Если валюта не указана — верни "EUR" (это бюджет в евро по умолчанию).
+  Если валюта не указана — верни "${env.CURRENCY_CODE}" (валюта по умолчанию).
 - "category": строго одно из названий ниже, дословно. «Продукты и БХ»
   (БХ — бытовая химия) покрывает не только еду, но и мелкие хозяйственные
   товары из продуктового магазина: пакеты, фольга, салфетки, моющие
@@ -59,11 +59,11 @@ function buildSystemPrompt(categories: Category[]): string {
   без суммы и валюты.
 
 Примеры:
-"кофе 3.5" -> {"transactions":[{"type":"expense","amount":3.5,"currency":"EUR","category":"Кафе и рестораны","note":"кофе"}]}
-"2 чай" -> {"transactions":[{"type":"expense","amount":2,"currency":"EUR","category":"Кафе и рестораны","note":"чай"}]}
-"ноутбук 20" -> {"transactions":[{"type":"expense","amount":20,"currency":"EUR","category":null,"note":"ноутбук"}]}
-"получил зарплату 1500" -> {"transactions":[{"type":"income","amount":1500,"currency":"EUR","category":"Зарплата","note":"зарплата"}]}
-"кофе 3.5, такси 12" -> {"transactions":[{"type":"expense","amount":3.5,"currency":"EUR","category":"Кафе и рестораны","note":"кофе"},{"type":"expense","amount":12,"currency":"EUR","category":"Транспорт","note":"такси"}]}
+"кофе 3.5" -> {"transactions":[{"type":"expense","amount":3.5,"currency":"${env.CURRENCY_CODE}","category":"Кафе и рестораны","note":"кофе"}]}
+"2 чай" -> {"transactions":[{"type":"expense","amount":2,"currency":"${env.CURRENCY_CODE}","category":"Кафе и рестораны","note":"чай"}]}
+"ноутбук 20" -> {"transactions":[{"type":"expense","amount":20,"currency":"${env.CURRENCY_CODE}","category":null,"note":"ноутбук"}]}
+"получил зарплату 1500" -> {"transactions":[{"type":"income","amount":1500,"currency":"${env.CURRENCY_CODE}","category":"Зарплата","note":"зарплата"}]}
+"кофе 3.5, такси 12" -> {"transactions":[{"type":"expense","amount":3.5,"currency":"${env.CURRENCY_CODE}","category":"Кафе и рестораны","note":"кофе"},{"type":"expense","amount":12,"currency":"${env.CURRENCY_CODE}","category":"Транспорт","note":"такси"}]}
 "привет как дела" -> {"transactions":[]}
 
 Категории расходов (только если type="expense"):
