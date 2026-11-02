@@ -28,3 +28,26 @@ export function monthKey(date: Date, timeZone: string = APP_TIME_ZONE): string {
 export function currentMonthKey(timeZone: string = APP_TIME_ZONE): string {
   return monthKey(new Date(), timeZone);
 }
+
+// Today's calendar date as "YYYY-MM-DD" in the app time zone. Passed to the AI
+// so it can resolve relative dates ("вчера", "1 ноября") to an absolute date.
+export function todayDateString(timeZone: string = APP_TIME_ZONE): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const get = (t: string) => parts.find((p) => p.type === t)?.value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+// Turns a "YYYY-MM-DD" (a date the user named) into an instant at 12:00 UTC of
+// that day. Noon is deliberately mid-day so that in any realistic time zone the
+// local calendar date still equals the given day -- both monthKey and
+// toSheetsSerial then resolve to exactly the date the user meant, with no
+// midnight-boundary drift.
+export function dateStringToInstant(ymd: string): Date {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+}

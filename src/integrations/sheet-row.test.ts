@@ -29,6 +29,14 @@ test('toSheetsSerial: one calendar day apart is exactly 1 apart', () => {
   assert.equal(b - a, 1);
 });
 
+test('toSheetsSerial: uses the LOCAL calendar day at a midnight boundary', () => {
+  // 23:47 UTC on Oct 31 is 00:47 Nov 1 in Podgorica -> should serialize to
+  // Nov 1 (46327), matching the month it is filed under, not Oct 31.
+  const instant = new Date('2026-10-31T23:47:46Z');
+  assert.equal(toSheetsSerial(instant, 'Europe/Podgorica'), 46327);
+  assert.equal(toSheetsSerial(instant, 'UTC'), 46326);
+});
+
 test('buildTemplateRowValues: missing category falls back to "Без категории"', () => {
   const values = buildTemplateRowValues({ type: 'expense', amount: 3.5, categoryName: null, note: 'кофе' });
   assert.equal(values.category, 'Без категории');
