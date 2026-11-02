@@ -43,6 +43,7 @@ import {
   type SheetRowEdits,
   type RowWithDate,
 } from '../integrations/google-sheets.js';
+import { monthKey } from '../integrations/month-key.js';
 import { calculateAutoInvestment, AUTO_INVEST_CATEGORY_NAME, AUTO_INVEST_NOTE } from '../services/auto-investment-logic.js';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
@@ -556,7 +557,12 @@ async function handleAgentFallback(ctx: Context, text: string, categories: Categ
     return;
   }
 
-  const original = { type: target.type, amount: target.amount, description: target.description };
+  const original = {
+    type: target.type,
+    amount: target.amount,
+    description: target.description,
+    createdAt: target.created_at,
+  };
 
   if (intent.intent === 'delete') {
     const summary = formatTargetSummary(target);
@@ -778,6 +784,7 @@ bot.on('callback_query:data', async (ctx) => {
     }
 
     const sheetMatch: SheetRowMatch = {
+      month: monthKey(new Date(action.original.createdAt)),
       type: action.original.type,
       amount: action.original.amount,
       description: action.original.description ?? '',

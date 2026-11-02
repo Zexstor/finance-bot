@@ -9,6 +9,7 @@ export interface SheetRowOriginal {
   type: 'expense' | 'income';
   amount: number;
   description: string | null;
+  createdAt: string; // the transaction's created_at, used to pick its month's sheet
 }
 
 interface PendingAgentAction {

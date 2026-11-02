@@ -1,6 +1,8 @@
 import { JWT } from 'google-auth-library';
 import { GoogleSpreadsheet, GoogleSpreadsheetWorksheet } from 'google-spreadsheet';
 import { env } from '../config/env.js';
+import { getSheetIdForMonth } from '../db/monthly-sheets.js';
+import { monthKey, currentMonthKey } from './month-key.js';
 import {
   columnsFor,
   toSheetsSerial,
@@ -15,62 +17,61 @@ const FIRST_DATA_ROW = 4; // 0-indexed; matches where the template's own example
 const MAX_ROW = 999;
 const DATE_FORMAT = { type: 'DATE' as const, pattern: 'DD.MM.YYYY' };
 
-let cachedDoc: GoogleSpreadsheet | null = null;
-let cachedSheet: GoogleSpreadsheetWorksheet | null = null;
-let cachedSummarySheet: GoogleSpreadsheetWorksheet | null = null;
+// Each calendar month is a separate spreadsheet now, so docs and worksheets
+// are cached per spreadsheet id instead of as a single global.
+let cachedJwt: JWT | null = null;
+const docCache = new Map<string, GoogleSpreadsheet>();
+const sheetCache = new Map<string, GoogleSpreadsheetWorksheet>(); // key: `${spreadsheetId}:${title}`
 
 function isConfigured(): boolean {
-  return Boolean(
-    env.GOOGLE_SERVICE_ACCOUNT_EMAIL && env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY && env.GOOGLE_SHEET_ID,
-  );
+  return Boolean(env.GOOGLE_SERVICE_ACCOUNT_EMAIL && env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY);
 }
 
-async function getDoc(): Promise<GoogleSpreadsheet> {
-  if (cachedDoc) {
-    return cachedDoc;
+function getJwt(): JWT {
+  if (!cachedJwt) {
+    cachedJwt = new JWT({
+      email: env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      // .env stores the key with literal "\n" escapes; Google's SDK needs real newlines.
+      key: env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+  }
+  return cachedJwt;
+}
+
+// Resolves which spreadsheet a given month writes to. Returns null when no
+// sheet has been registered for that month -- the caller then skips the sync
+// (the DB still has the data) rather than writing into the wrong month.
+async function resolveSheetId(month: string): Promise<string | null> {
+  return getSheetIdForMonth(month);
+}
+
+async function getDoc(spreadsheetId: string): Promise<GoogleSpreadsheet> {
+  const cached = docCache.get(spreadsheetId);
+  if (cached) {
+    return cached;
   }
 
-  const jwt = new JWT({
-    email: env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-    // .env stores the key with literal "\n" escapes; Google's SDK needs real newlines.
-    key: env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
-
-  const doc = new GoogleSpreadsheet(env.GOOGLE_SHEET_ID as string, jwt);
+  const doc = new GoogleSpreadsheet(spreadsheetId, getJwt());
   await doc.loadInfo();
-
-  cachedDoc = doc;
+  docCache.set(spreadsheetId, doc);
   return doc;
 }
 
-async function getSheet(): Promise<GoogleSpreadsheetWorksheet> {
-  if (cachedSheet) {
-    return cachedSheet;
+async function getSheetByTitle(spreadsheetId: string, title: string): Promise<GoogleSpreadsheetWorksheet> {
+  const cacheKey = `${spreadsheetId}:${title}`;
+  const cached = sheetCache.get(cacheKey);
+  if (cached) {
+    return cached;
   }
 
-  const doc = await getDoc();
-  const sheet = doc.sheetsByTitle[SHEET_TITLE];
+  const doc = await getDoc(spreadsheetId);
+  const sheet = doc.sheetsByTitle[title];
   if (!sheet) {
-    throw new Error(`Sheet tab "${SHEET_TITLE}" not found`);
+    throw new Error(`Sheet tab "${title}" not found in spreadsheet ${spreadsheetId}`);
   }
 
-  cachedSheet = sheet;
-  return sheet;
-}
-
-async function getSummarySheet(): Promise<GoogleSpreadsheetWorksheet> {
-  if (cachedSummarySheet) {
-    return cachedSummarySheet;
-  }
-
-  const doc = await getDoc();
-  const sheet = doc.sheetsByTitle[SUMMARY_SHEET_TITLE];
-  if (!sheet) {
-    throw new Error(`Sheet tab "${SUMMARY_SHEET_TITLE}" not found`);
-  }
-
-  cachedSummarySheet = sheet;
+  sheetCache.set(cacheKey, sheet);
   return sheet;
 }
 
@@ -121,43 +122,57 @@ export async function appendTransactionRow(row: RowWithDate): Promise<void> {
   return appendTransactionRows([row]);
 }
 
-// Writes every row with ONE scan-for-empty-row per type block and ONE final
-// save, instead of a full loadCells+saveUpdatedCells round trip per item.
-// A receipt with many line items awaited sequentially (needed to avoid the
-// "multiple items race to the same empty row" bug) was slow enough to blow
-// past Telegram's callback-query validity window -- answerCallbackQuery
-// failed with "query is too old", so the user never saw any confirmation
-// even though the save itself had already gone through.
+// Writes every row grouped by (month, type): the month picks the spreadsheet,
+// the type picks the column block. One scan-for-empty-row per block and one
+// save per spreadsheet, instead of a round trip per item. A receipt with many
+// line items awaited sequentially (needed to avoid the "multiple items race
+// to the same empty row" bug) was slow enough to blow past Telegram's
+// callback-query validity window, so the save stays batched.
 export async function appendTransactionRows(rows: RowWithDate[]): Promise<void> {
   if (!isConfigured() || rows.length === 0) {
     return;
   }
 
-  try {
-    const sheet = await getSheet();
+  const byMonth = new Map<string, RowWithDate[]>();
+  for (const row of rows) {
+    const month = monthKey(new Date(row.createdAt));
+    const group = byMonth.get(month) ?? [];
+    group.push(row);
+    byMonth.set(month, group);
+  }
 
-    const byType = new Map<RowWithDate['type'], RowWithDate[]>();
-    for (const row of rows) {
-      const group = byType.get(row.type) ?? [];
-      group.push(row);
-      byType.set(row.type, group);
+  for (const [month, monthRows] of byMonth) {
+    const spreadsheetId = await resolveSheetId(month);
+    if (!spreadsheetId) {
+      console.warn(
+        `No Google Sheet registered for month ${month}; skipped ${monthRows.length} row(s) in the sheet (the database still has them).`,
+      );
+      continue;
     }
 
-    for (const [type, group] of byType) {
-      const cols = columnsFor(type);
-      // Loads the full column range for every candidate row, so cells for
-      // startRow..startRow+group.length-1 are all cached and ready to write.
-      const startRow = await findFirstEmptyRow(sheet, cols);
+    try {
+      const sheet = await getSheetByTitle(spreadsheetId, SHEET_TITLE);
 
-      group.forEach((row, i) => writeRowCells(sheet, startRow + i, cols, row));
+      const byType = new Map<RowWithDate['type'], RowWithDate[]>();
+      for (const row of monthRows) {
+        const group = byType.get(row.type) ?? [];
+        group.push(row);
+        byType.set(row.type, group);
+      }
+
+      for (const [, group] of byType) {
+        const cols = columnsFor(group[0].type);
+        const startRow = await findFirstEmptyRow(sheet, cols);
+        group.forEach((row, i) => writeRowCells(sheet, startRow + i, cols, row));
+      }
+
+      await sheet.saveUpdatedCells();
+    } catch (error) {
+      // Don't log the raw error object: google-auth-library errors embed the
+      // outgoing request, including the live Authorization bearer token.
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to append rows to Google Sheet for ${month}:`, message);
     }
-
-    await sheet.saveUpdatedCells();
-  } catch (error) {
-    // Don't log the raw error object: google-auth-library errors embed the
-    // outgoing request, including the live Authorization bearer token.
-    const message = error instanceof Error ? error.message : String(error);
-    console.error('Failed to append rows to Google Sheet:', message);
   }
 }
 
@@ -200,6 +215,7 @@ async function findUniqueRow(
 }
 
 export interface SheetRowMatch {
+  month: string; // which month's spreadsheet the row lives in
   type: RowWithDate['type'];
   amount: number;
   description: string;
@@ -216,8 +232,14 @@ export async function updateTransactionInSheet(match: SheetRowMatch, edits: Shee
     return;
   }
 
+  const spreadsheetId = await resolveSheetId(match.month);
+  if (!spreadsheetId) {
+    console.warn(`updateTransactionInSheet: no sheet registered for month ${match.month}; skipped.`);
+    return;
+  }
+
   try {
-    const sheet = await getSheet();
+    const sheet = await getSheetByTitle(spreadsheetId, SHEET_TITLE);
     const cols = columnsFor(match.type);
     const row = await findUniqueRow(sheet, cols, match.description, match.amount);
 
@@ -258,15 +280,21 @@ const SUMMARY_SCAN_END_ROW = 100;
 const SUMMARY_NAME_COL = 1;
 const SUMMARY_PLANNED_COL = 3;
 
-export async function getPlannedCategoryBudgets(): Promise<Map<string, number>> {
+export async function getPlannedCategoryBudgets(month: string = currentMonthKey()): Promise<Map<string, number>> {
   const budgets = new Map<string, number>();
 
   if (!isConfigured()) {
     return budgets;
   }
 
+  const spreadsheetId = await resolveSheetId(month);
+  if (!spreadsheetId) {
+    console.warn(`getPlannedCategoryBudgets: no sheet registered for month ${month}; returning empty budgets.`);
+    return budgets;
+  }
+
   try {
-    const sheet = await getSummarySheet();
+    const sheet = await getSheetByTitle(spreadsheetId, SUMMARY_SHEET_TITLE);
     await sheet.loadCells({
       startRowIndex: SUMMARY_SCAN_START_ROW,
       endRowIndex: SUMMARY_SCAN_END_ROW,
@@ -297,8 +325,14 @@ export async function deleteTransactionFromSheet(match: SheetRowMatch): Promise<
     return;
   }
 
+  const spreadsheetId = await resolveSheetId(match.month);
+  if (!spreadsheetId) {
+    console.warn(`deleteTransactionFromSheet: no sheet registered for month ${match.month}; skipped.`);
+    return;
+  }
+
   try {
-    const sheet = await getSheet();
+    const sheet = await getSheetByTitle(spreadsheetId, SHEET_TITLE);
     const cols = columnsFor(match.type);
     const row = await findUniqueRow(sheet, cols, match.description, match.amount);
 
