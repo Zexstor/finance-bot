@@ -6,6 +6,7 @@ export interface PendingBatchItem {
   note: string;
   categoryId: number | null;
   categoryName: string | null;
+  date: string | null; // user-named date "YYYY-MM-DD", or null for today
 }
 
 interface PendingBatch {

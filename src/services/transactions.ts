@@ -14,6 +14,7 @@ export async function recordTransaction(
   note: string,
   categoryId: number | null,
   source: TransactionSource = 'text',
+  occurredAt?: Date,
 ): Promise<void> {
   const { error } = await supabase.from('transactions').insert({
     user_id: userId,
@@ -22,6 +23,9 @@ export async function recordTransaction(
     description: note || null,
     source,
     category_id: categoryId,
+    // Only set created_at when the user named an explicit date; otherwise let
+    // the column default (now()) stand, so it still means "logged just now".
+    ...(occurredAt ? { created_at: occurredAt.toISOString() } : {}),
   });
 
   if (error) {

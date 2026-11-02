@@ -3,10 +3,11 @@ import { openai } from './client.js';
 import { env } from '../config/env.js';
 import type { Category } from '../types/db.js';
 import { transactionItemSchema } from './transaction-logic.js';
+import { todayDateString } from '../integrations/month-key.js';
 
 export type TransactionItem = z.infer<typeof transactionItemSchema>;
 
-function buildSystemPrompt(categories: Category[]): string {
+function buildSystemPrompt(categories: Category[], today: string): string {
   const expenseNames = categories
     .filter((c) => c.type === 'expense')
     .map((c) => c.name)
@@ -25,7 +26,7 @@ function buildSystemPrompt(categories: Category[]): string {
 
 {
   "transactions": [
-    { "type": "expense" | "income", "amount": number, "currency": string, "category": string | null, "note": string }
+    { "type": "expense" | "income", "amount": number, "currency": string, "category": string | null, "note": string, "date": string | null }
   ]
 }
 
@@ -57,13 +58,20 @@ function buildSystemPrompt(categories: Category[]): string {
   категория не подходит уверенно, верни null ТОЛЬКО в "category".
 - "note": короткая заметка (1-5 слов) о том, на что/от чего операция,
   без суммы и валюты.
+- "date": дата операции в формате "YYYY-MM-DD", ЕСЛИ пользователь её указал
+  словами ("за 31 октября", "вчера", "позавчера", "1 ноября", "01.11",
+  "в понедельник"). Сегодня ${today}. Относительные даты ("вчера",
+  "позавчера") считай от сегодняшней. Если год не назван — ближайший
+  подходящий (не в будущем). Если дата не указана вообще — верни null.
+  Дата относится к КОНКРЕТНОЙ операции рядом с которой она стоит.
 
-Примеры:
-"кофе 3.5" -> {"transactions":[{"type":"expense","amount":3.5,"currency":"EUR","category":"Кафе и рестораны","note":"кофе"}]}
-"2 чай" -> {"transactions":[{"type":"expense","amount":2,"currency":"EUR","category":"Кафе и рестораны","note":"чай"}]}
-"ноутбук 20" -> {"transactions":[{"type":"expense","amount":20,"currency":"EUR","category":null,"note":"ноутбук"}]}
-"получил зарплату 1500" -> {"transactions":[{"type":"income","amount":1500,"currency":"EUR","category":"Зарплата","note":"зарплата"}]}
-"кофе 3.5, такси 12" -> {"transactions":[{"type":"expense","amount":3.5,"currency":"EUR","category":"Кафе и рестораны","note":"кофе"},{"type":"expense","amount":12,"currency":"EUR","category":"Транспорт","note":"такси"}]}
+Примеры (сегодня ${today}):
+"кофе 3.5" -> {"transactions":[{"type":"expense","amount":3.5,"currency":"EUR","category":"Кафе и рестораны","note":"кофе","date":null}]}
+"2 чай" -> {"transactions":[{"type":"expense","amount":2,"currency":"EUR","category":"Кафе и рестораны","note":"чай","date":null}]}
+"ноутбук 20" -> {"transactions":[{"type":"expense","amount":20,"currency":"EUR","category":null,"note":"ноутбук","date":null}]}
+"получил зарплату 1500" -> {"transactions":[{"type":"income","amount":1500,"currency":"EUR","category":"Зарплата","note":"зарплата","date":null}]}
+"кофе 3.5, такси 12" -> {"transactions":[{"type":"expense","amount":3.5,"currency":"EUR","category":"Кафе и рестораны","note":"кофе","date":null},{"type":"expense","amount":12,"currency":"EUR","category":"Транспорт","note":"такси","date":null}]}
+"коворкинг 180 за 31 октября" -> {"transactions":[{"type":"expense","amount":180,"currency":"EUR","category":"Для дома","note":"коворкинг","date":"2026-10-31"}]}
 "привет как дела" -> {"transactions":[]}
 
 Категории расходов (только если type="expense"):
@@ -78,7 +86,7 @@ export async function classifyTransactions(text: string, categories: Category[])
     model: env.OPENAI_MODEL,
     temperature: 0,
     messages: [
-      { role: 'system', content: buildSystemPrompt(categories) },
+      { role: 'system', content: buildSystemPrompt(categories, todayDateString()) },
       { role: 'user', content: text },
     ],
     response_format: {
@@ -99,8 +107,9 @@ export async function classifyTransactions(text: string, categories: Category[])
                   currency: { type: 'string' },
                   category: { type: ['string', 'null'] },
                   note: { type: 'string' },
+                  date: { type: ['string', 'null'] },
                 },
-                required: ['type', 'amount', 'currency', 'category', 'note'],
+                required: ['type', 'amount', 'currency', 'category', 'note', 'date'],
                 additionalProperties: false,
               },
             },

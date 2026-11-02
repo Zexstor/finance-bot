@@ -18,6 +18,7 @@ test('pending-clarifications: take returns the data once, then null', () => {
     note: 'кофе',
     source: 'text',
     categories: [{ id: 1, name: 'Кафе и рестораны' }],
+    date: null,
   });
 
   const first = takePending(userId);
@@ -60,8 +61,8 @@ test('pending-batch: take returns the data once, then null', () => {
   setPendingBatch(userId, {
     source: 'voice',
     items: [
-      { type: 'expense', amount: 3.5, note: 'кофе', categoryId: 1, categoryName: 'Кафе и рестораны' },
-      { type: 'expense', amount: 12, note: 'такси', categoryId: null, categoryName: null },
+      { type: 'expense', amount: 3.5, note: 'кофе', categoryId: 1, categoryName: 'Кафе и рестораны', date: null },
+      { type: 'expense', amount: 12, note: 'такси', categoryId: null, categoryName: null, date: null },
     ],
   });
 
@@ -90,8 +91,8 @@ test('pending-receipts: hasPendingReceipt reflects the take-once state, not just
 
 test('pending-batch: a second photo/message for the same user overwrites the first pending entry', () => {
   const userId = 900006;
-  setPendingBatch(userId, { source: 'text', items: [{ type: 'expense', amount: 1, note: 'a', categoryId: null, categoryName: null }] });
-  setPendingBatch(userId, { source: 'text', items: [{ type: 'expense', amount: 2, note: 'b', categoryId: null, categoryName: null }] });
+  setPendingBatch(userId, { source: 'text', items: [{ type: 'expense', amount: 1, note: 'a', categoryId: null, categoryName: null, date: null }] });
+  setPendingBatch(userId, { source: 'text', items: [{ type: 'expense', amount: 2, note: 'b', categoryId: null, categoryName: null, date: null }] });
 
   const result = takePendingBatch(userId);
   assert.equal(result?.items[0]?.amount, 2);

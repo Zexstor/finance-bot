@@ -6,6 +6,7 @@ interface PendingClarification {
   note: string;
   source: TransactionSource;
   categories: { id: number; name: string }[];
+  date: string | null; // user-named date "YYYY-MM-DD", or null for today
   expiresAt: number;
 }
 

@@ -43,7 +43,7 @@ import {
   type SheetRowEdits,
   type RowWithDate,
 } from '../integrations/google-sheets.js';
-import { monthKey } from '../integrations/month-key.js';
+import { monthKey, dateStringToInstant, APP_TIME_ZONE } from '../integrations/month-key.js';
 import { calculateAutoInvestment, AUTO_INVEST_CATEGORY_NAME, AUTO_INVEST_NOTE } from '../services/auto-investment-logic.js';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
@@ -51,6 +51,34 @@ export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 bot.catch((error) => {
   console.error('Unhandled bot error:', error);
 });
+
+// --- user-named transaction dates ------------------------------------------
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// The AI returns "YYYY-MM-DD" when the user named a date, else null. Anything
+// not well-formed is ignored (falls back to "now").
+function occurredAtFromDate(date: string | null): Date | undefined {
+  return date && DATE_RE.test(date) ? dateStringToInstant(date) : undefined;
+}
+
+function createdAtIso(occurredAt?: Date): string {
+  return (occurredAt ?? new Date()).toISOString();
+}
+
+// Confirmation suffix shown only when the user backdated the operation, so
+// they can see the bot filed it under the date they meant.
+function dateSuffix(occurredAt?: Date): string {
+  if (!occurredAt) {
+    return '';
+  }
+  const d = occurredAt.toLocaleDateString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    timeZone: APP_TIME_ZONE,
+  });
+  return ` 📅 ${d}`;
+}
 
 bot.use(accessControl);
 
@@ -417,6 +445,7 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
         note: result.note,
         source,
         categories: sameTypeCategories.map((c) => ({ id: c.id, name: c.name })),
+        date: result.date,
       });
 
       const keyboard = new InlineKeyboard();
@@ -434,8 +463,10 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
       return;
     }
 
+    const occurredAt = occurredAtFromDate(result.date);
+
     try {
-      await recordTransaction(ctx.from.id, result.type, result.amount, result.note, matchedCategory.id, source);
+      await recordTransaction(ctx.from.id, result.type, result.amount, result.note, matchedCategory.id, source, occurredAt);
     } catch (error) {
       console.error('Failed to record transaction:', error);
       await ctx.reply('Не получилось сохранить, попробуй ещё раз.');
@@ -447,15 +478,15 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
       amount: result.amount,
       categoryName: matchedCategory.name,
       note: result.note,
-      createdAt: new Date().toISOString(),
+      createdAt: createdAtIso(occurredAt),
     });
 
     const icon = result.type === 'income' ? '➕' : '➖';
     const label = result.type === 'income' ? 'Доход' : 'Расход';
     const balanceSuffix = await getBalanceSuffix();
     const investSuffix =
-      result.type === 'income' ? await autoInvestFromIncome(ctx, result.amount, categories, source) : '';
-    const confirmText = `${icon} ${label}: ${result.amount.toFixed(2)} € — ${matchedCategory.name} (${result.note || 'без заметки'})${balanceSuffix}${investSuffix}`;
+      result.type === 'income' ? await autoInvestFromIncome(ctx, result.amount, categories, source, occurredAt) : '';
+    const confirmText = `${icon} ${label}: ${result.amount.toFixed(2)} € — ${matchedCategory.name} (${result.note || 'без заметки'})${dateSuffix(occurredAt)}${balanceSuffix}${investSuffix}`;
     await ctx.reply(confirmText);
     void notifyOtherUsers(ctx, `👤 ${ctx.from.first_name} записал:\n${confirmText}`);
     return;
@@ -470,6 +501,7 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
       note: t.note,
       categoryId: matched?.id ?? null,
       categoryName: matched?.name ?? null,
+      date: t.date,
     };
   });
 
@@ -834,24 +866,26 @@ bot.on('callback_query:data', async (ctx) => {
       console.error('Failed to load categories for auto-investment:', error);
     }
 
-    const batchCreatedAt = new Date().toISOString();
     let totalInvested = 0;
     const investRows: RowWithDate[] = [];
 
     try {
       for (const item of batch.items) {
-        await recordTransaction(ctx.from.id, item.type, item.amount, item.note, item.categoryId, batch.source);
+        const occurredAt = occurredAtFromDate(item.date);
+        await recordTransaction(ctx.from.id, item.type, item.amount, item.note, item.categoryId, batch.source, occurredAt);
 
         if (item.type === 'income' && investCategory) {
           const investAmount = calculateAutoInvestment(item.amount);
           if (investAmount > 0) {
-            await recordTransaction(ctx.from.id, 'expense', investAmount, AUTO_INVEST_NOTE, investCategory.id, batch.source);
+            // The auto-investment expense inherits the income's date so it
+            // lands in the same month.
+            await recordTransaction(ctx.from.id, 'expense', investAmount, AUTO_INVEST_NOTE, investCategory.id, batch.source, occurredAt);
             investRows.push({
               type: 'expense',
               amount: investAmount,
               categoryName: investCategory.name,
               note: AUTO_INVEST_NOTE,
-              createdAt: batchCreatedAt,
+              createdAt: createdAtIso(occurredAt),
             });
             totalInvested += investAmount;
           }
@@ -869,7 +903,7 @@ bot.on('callback_query:data', async (ctx) => {
         amount: item.amount,
         categoryName: item.categoryName,
         note: item.note,
-        createdAt: batchCreatedAt,
+        createdAt: createdAtIso(occurredAtFromDate(item.date)),
       })),
       ...investRows,
     ]);
@@ -913,6 +947,8 @@ bot.on('callback_query:data', async (ctx) => {
     }
   }
 
+  const clarifyOccurredAt = occurredAtFromDate(pendingEntry.date);
+
   try {
     await recordTransaction(
       ctx.from.id,
@@ -921,6 +957,7 @@ bot.on('callback_query:data', async (ctx) => {
       pendingEntry.note,
       categoryId,
       pendingEntry.source,
+      clarifyOccurredAt,
     );
   } catch (error) {
     console.error('Failed to record transaction after clarification:', error);
@@ -933,7 +970,7 @@ bot.on('callback_query:data', async (ctx) => {
     amount: pendingEntry.amount,
     categoryName,
     note: pendingEntry.note,
-    createdAt: new Date().toISOString(),
+    createdAt: createdAtIso(clarifyOccurredAt),
   });
 
   // pendingEntry.categories only holds categories of the matching type (the
@@ -942,7 +979,13 @@ bot.on('callback_query:data', async (ctx) => {
   let investSuffix = '';
   if (pendingEntry.type === 'income') {
     try {
-      investSuffix = await autoInvestFromIncome(ctx, pendingEntry.amount, await getCategories(), pendingEntry.source);
+      investSuffix = await autoInvestFromIncome(
+        ctx,
+        pendingEntry.amount,
+        await getCategories(),
+        pendingEntry.source,
+        clarifyOccurredAt,
+      );
     } catch (error) {
       console.error('Failed to load categories for auto-investment:', error);
     }
@@ -952,7 +995,7 @@ bot.on('callback_query:data', async (ctx) => {
   await ctx.answerCallbackQuery();
   const icon = pendingEntry.type === 'income' ? '➕' : '➖';
   const label = pendingEntry.type === 'income' ? 'Доход' : 'Расход';
-  const clarifyConfirmText = `${icon} ${label}: ${pendingEntry.amount.toFixed(2)} € — ${categoryName} (${pendingEntry.note || 'без заметки'})${clarifyBalanceSuffix}${investSuffix}`;
+  const clarifyConfirmText = `${icon} ${label}: ${pendingEntry.amount.toFixed(2)} € — ${categoryName} (${pendingEntry.note || 'без заметки'})${dateSuffix(clarifyOccurredAt)}${clarifyBalanceSuffix}${investSuffix}`;
   await ctx.editMessageText(clarifyConfirmText);
   void notifyOtherUsers(ctx, `👤 ${ctx.from.first_name} записал:\n${clarifyConfirmText}`);
 });
@@ -1039,6 +1082,7 @@ async function autoInvestFromIncome(
   incomeAmount: number,
   categories: Category[],
   source: TransactionSource,
+  occurredAt?: Date,
 ): Promise<string> {
   if (!ctx.from) {
     return '';
@@ -1056,7 +1100,7 @@ async function autoInvestFromIncome(
   }
 
   try {
-    await recordTransaction(ctx.from.id, 'expense', investAmount, AUTO_INVEST_NOTE, investCategory.id, source);
+    await recordTransaction(ctx.from.id, 'expense', investAmount, AUTO_INVEST_NOTE, investCategory.id, source, occurredAt);
   } catch (error) {
     console.error('Failed to record auto-investment transaction:', error);
     return '';
@@ -1067,7 +1111,7 @@ async function autoInvestFromIncome(
     amount: investAmount,
     categoryName: investCategory.name,
     note: AUTO_INVEST_NOTE,
-    createdAt: new Date().toISOString(),
+    createdAt: createdAtIso(occurredAt),
   });
 
   return `\n💰 Автоматически отложено на инвестиции: ${investAmount.toFixed(2)} €`;

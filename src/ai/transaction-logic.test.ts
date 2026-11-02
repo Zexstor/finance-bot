@@ -10,16 +10,17 @@ test('classificationSchema: accepts the "not about money" empty-array case', () 
 test('classificationSchema: accepts multiple transactions in one message', () => {
   const parsed = classificationSchema.parse({
     transactions: [
-      { type: 'expense', amount: 3.5, currency: 'EUR', category: 'Кафе и рестораны', note: 'кофе' },
-      { type: 'expense', amount: 12, currency: 'EUR', category: 'Транспорт', note: 'такси' },
+      { type: 'expense', amount: 3.5, currency: 'EUR', category: 'Кафе и рестораны', note: 'кофе', date: null },
+      { type: 'expense', amount: 12, currency: 'EUR', category: 'Транспорт', note: 'такси', date: '2026-10-31' },
     ],
   });
   assert.equal(parsed.transactions.length, 2);
+  assert.equal(parsed.transactions[1].date, '2026-10-31');
 });
 
 test('classificationSchema: accepts a null category (uncertain) but requires type/amount', () => {
   const parsed = classificationSchema.parse({
-    transactions: [{ type: 'expense', amount: 20, currency: 'EUR', category: null, note: 'ноутбук' }],
+    transactions: [{ type: 'expense', amount: 20, currency: 'EUR', category: null, note: 'ноутбук', date: null }],
   });
   assert.equal(parsed.transactions[0].category, null);
 });
