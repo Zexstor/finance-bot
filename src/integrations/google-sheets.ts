@@ -187,11 +187,15 @@ async function findUniqueRow(
   description: string,
   amount: number,
 ): Promise<number | null> {
+  // Loads the whole row (date..category), not just amount/description --
+  // deleteTransactionFromSheet also clears the date and category cells of
+  // the matched row, and google-spreadsheet throws "This cell has not been
+  // loaded yet" for any cell outside whatever range was last loaded.
   await sheet.loadCells({
     startRowIndex: FIRST_DATA_ROW,
     endRowIndex: MAX_ROW,
-    startColumnIndex: cols.amount,
-    endColumnIndex: cols.description + 1,
+    startColumnIndex: cols.date,
+    endColumnIndex: cols.category + 1,
   });
 
   const normalizedTarget = description.trim().toLowerCase();

@@ -47,6 +47,11 @@ function buildSystemPrompt(categories: Category[], today: string): string {
   распознавать такие сообщения просто потому что порядок слов необычный.
 - "type": "expense" — если это трата, "income" — если поступление денег
   (зарплата, премия, подарок получен и т.п.). По умолчанию, если не ясно — "expense".
+  Слово «подарки»/«подарок» САМО ПО СЕБЕ не означает доход — "Подарки" есть и
+  среди расходов (купил подарок кому-то), и среди доходов (подарили денег).
+  Без явного указания на получение денег ("подарили", "получил подарок",
+  "мне на подарок", "пришли деньги на подарок") считай это ПОКУПКОЙ подарка,
+  то есть "expense".
 - "amount": сумма операции числом, без символов валюты.
 - "currency": трёхбуквенный код валюты, если явно упомянута (USD, RUB...).
   Если валюта не указана — верни "EUR" (это бюджет в евро по умолчанию).
@@ -72,6 +77,8 @@ function buildSystemPrompt(categories: Category[], today: string): string {
 "получил зарплату 1500" -> {"transactions":[{"type":"income","amount":1500,"currency":"EUR","category":"Зарплата","note":"зарплата","date":null}]}
 "кофе 3.5, такси 12" -> {"transactions":[{"type":"expense","amount":3.5,"currency":"EUR","category":"Кафе и рестораны","note":"кофе","date":null},{"type":"expense","amount":12,"currency":"EUR","category":"Транспорт","note":"такси","date":null}]}
 "коворкинг 180 за 31 октября" -> {"transactions":[{"type":"expense","amount":180,"currency":"EUR","category":"Для дома","note":"коворкинг","date":"2026-10-31"}]}
+"подарки 60" -> {"transactions":[{"type":"expense","amount":60,"currency":"EUR","category":"Подарки","note":"подарки","date":null}]}
+"подарили 500" -> {"transactions":[{"type":"income","amount":500,"currency":"EUR","category":"Подарки","note":"подарили","date":null}]}
 "привет как дела" -> {"transactions":[]}
 
 Категории расходов (только если type="expense"):
