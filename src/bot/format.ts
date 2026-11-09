@@ -13,6 +13,17 @@ export function formatBalanceLine(balance: number, currency = '€'): string {
   return `${label}: ${Math.abs(balance).toFixed(2)} ${currency}`;
 }
 
+// Unlike formatBalanceLine, these keep a fixed label regardless of sign --
+// a negative starting/ending balance (overspent, carried over as debt)
+// shows its own minus sign rather than switching to a "overspent" label.
+export function formatStartingBalanceLine(amount: number, currency = '€'): string {
+  return `Остаток на начало месяца: ${amount.toFixed(2)} ${currency}`;
+}
+
+export function formatEndingBalanceLine(amount: number, currency = '€'): string {
+  return `Остаток на конец периода: ${amount.toFixed(2)} ${currency}`;
+}
+
 export interface CategoryTotalLike {
   name: string;
   total: number;

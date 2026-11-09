@@ -15,6 +15,9 @@ import { setPendingBatch, takePendingBatch } from './pending-batch.js';
 import { setPendingAgentAction, takePendingAgentAction } from './pending-agent-action.js';
 import { setPendingCategoryGoalInput, takePendingCategoryGoalInput } from './pending-category-goal-input.js';
 import { parseCategoryGoalInput } from '../services/category-goal-logic.js';
+import { setPendingBalanceInput, takePendingBalanceInput } from './pending-balance-input.js';
+import { parseStartingBalanceInput } from '../services/balance-input-logic.js';
+import { getBalanceSummary, setStartingBalance } from '../services/monthly-balance.js';
 import { uploadReceiptImage, deleteReceiptImage } from '../db/storage.js';
 import { saveReceipt } from '../db/receipts.js';
 import type { Category, TransactionType, TransactionSource } from '../types/db.js';
@@ -41,6 +44,8 @@ import {
   formatQueryAnswer,
   formatForecastLines,
   formatIncomeGoalLines,
+  formatStartingBalanceLine,
+  formatEndingBalanceLine,
 } from './format.js';
 import {
   appendTransactionRow,
@@ -87,16 +92,23 @@ bot.command('list', async (ctx) => {
 
 bot.command('report', async (ctx) => {
   let report: MonthlyReport;
+  let balanceSummary;
 
+  const now = new Date();
   try {
-    report = await getMonthlyReport();
+    [report, balanceSummary] = await Promise.all([getMonthlyReport(), getBalanceSummary(now.getFullYear(), now.getMonth() + 1)]);
   } catch (error) {
     console.error('Failed to build report:', error);
     await ctx.reply('Не получилось построить отчёт, попробуй ещё раз.');
     return;
   }
 
-  const lines = [`📊 Отчёт за ${report.monthLabel}`, ''];
+  const lines = [
+    formatStartingBalanceLine(balanceSummary.startingBalance, env.CURRENCY_SYMBOL),
+    '',
+    `📊 Отчёт за ${report.monthLabel}`,
+    '',
+  ];
 
   if (report.goal > 0) {
     const percent = Math.round((report.income / report.goal) * 100);
@@ -130,7 +142,41 @@ bot.command('report', async (ctx) => {
   lines.push(...formatForecastLines(report.categoryForecasts, report.totalForecast, env.CURRENCY_SYMBOL));
   lines.push(...formatIncomeGoalLines(report.incomeCategoryForecasts, env.CURRENCY_SYMBOL));
 
+  lines.push('', formatEndingBalanceLine(balanceSummary.endingBalance, env.CURRENCY_SYMBOL));
+
   await replyText(ctx, lines.join('\n'));
+});
+
+bot.command('balance', async (ctx) => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+
+  let summary;
+  try {
+    summary = await getBalanceSummary(year, month);
+  } catch (error) {
+    console.error('Failed to build balance summary:', error);
+    await ctx.reply('Не получилось получить остаток, попробуй ещё раз.');
+    return;
+  }
+
+  const monthLabel = now.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+  const lines = [
+    `💰 Остаток за ${monthLabel}`,
+    '',
+    `Начальная сумма: ${summary.startingBalance.toFixed(2)} ${env.CURRENCY_SYMBOL}`,
+    `Доход: ${summary.income.toFixed(2)} ${env.CURRENCY_SYMBOL}`,
+    `Расход: ${summary.expenses.toFixed(2)} ${env.CURRENCY_SYMBOL}`,
+    `Текущий остаток: ${summary.endingBalance.toFixed(2)} ${env.CURRENCY_SYMBOL}`,
+  ];
+
+  if (summary.needsPrompt) {
+    lines.push('', 'Начальная сумма ещё не задана (поставил 0) — укажи реальную сумму кнопкой ниже.');
+  }
+
+  const keyboard = new InlineKeyboard().text('✏️ Изменить начальную сумму', `balance:edit:${year}:${month}`);
+  await ctx.reply(lines.join('\n'), { reply_markup: keyboard });
 });
 
 bot.command('setgoal', async (ctx) => {
@@ -222,6 +268,35 @@ bot.on('message:text', async (ctx) => {
 
     await ctx.reply(
       parsed.goal === null ? '✅ Цель убрана, прогноз снова по темпу трат.' : `✅ Цель на месяц: ${parsed.goal} ${env.CURRENCY_SYMBOL}`,
+    );
+    return;
+  }
+
+  const pendingBalanceTarget = takePendingBalanceInput(ctx.from.id);
+
+  if (pendingBalanceTarget) {
+    const parsed = parseStartingBalanceInput(text);
+
+    if (!parsed.ok) {
+      await ctx.reply('Нужно прислать число (например, 614650 или 614 650,50).');
+      return;
+    }
+
+    let summary;
+    try {
+      await setStartingBalance(pendingBalanceTarget.year, pendingBalanceTarget.month, parsed.amount, ctx.from.id);
+      summary = await getBalanceSummary(pendingBalanceTarget.year, pendingBalanceTarget.month);
+    } catch (error) {
+      console.error('Failed to set starting balance:', error);
+      await ctx.reply('Не получилось сохранить сумму, попробуй ещё раз.');
+      return;
+    }
+
+    await ctx.reply(
+      [
+        `✅ Начальная сумма: ${summary.startingBalance.toFixed(2)} ${env.CURRENCY_SYMBOL}`,
+        `Текущий остаток: ${summary.endingBalance.toFixed(2)} ${env.CURRENCY_SYMBOL}`,
+      ].join('\n'),
     );
     return;
   }
@@ -709,6 +784,14 @@ bot.on('callback_query:data', async (ctx) => {
     setPendingCategoryGoalInput(ctx.from.id, id);
     await ctx.answerCallbackQuery();
     await ctx.reply('Напиши месячную цель по этой категории числом (например, 150). Пришли 0, чтобы убрать цель.');
+    return;
+  }
+
+  if (data.startsWith('balance:edit:')) {
+    const [, , yearStr, monthStr] = data.split(':');
+    setPendingBalanceInput(ctx.from.id, { year: Number(yearStr), month: Number(monthStr) });
+    await ctx.answerCallbackQuery();
+    await ctx.reply('Напиши новую начальную сумму числом (например, 614650 или 614 650,50). Отрицательные значения разрешены.');
     return;
   }
 
