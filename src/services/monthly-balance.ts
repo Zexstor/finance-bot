@@ -1,5 +1,5 @@
 import { supabase } from '../db/client.js';
-import { getStoredStartingBalance, upsertStartingBalance } from '../db/monthly-balances.js';
+import { getStoredStartingBalance, upsertStartingBalance, deleteStoredStartingBalance } from '../db/monthly-balances.js';
 import {
   type MonthKey,
   previousMonthKey,
@@ -87,16 +87,13 @@ export async function getBalanceSummary(year: number, month: number): Promise<Ba
   };
 }
 
-// Manually setting a month's starting balance cascades forward through
-// every later month that's already been materialized (see
-// cascadeStartingBalance's doc comment for why it stops at the first gap).
-// Every month touched by the cascade becomes confirmed, including the
-// edited one.
-export async function setStartingBalance(year: number, month: number, amount: number, updatedBy: number): Promise<void> {
-  await upsertStartingBalance(year, month, amount, true, updatedBy);
-
-  let current: MonthKey = { year, month };
-  let currentBalance = amount;
+// Walks forward from `from`, shifting every already-materialized later
+// month's starting balance to match, stamping each one with isConfirmed
+// (see cascadeStartingBalance's doc comment -- this mirrors that pure
+// algorithm against the DB). Stops at the first month with no stored row.
+async function cascadeForward(from: MonthKey, startingBalance: number, isConfirmed: boolean, updatedBy: number | null): Promise<void> {
+  let current = from;
+  let currentBalance = startingBalance;
 
   while (true) {
     const totals = await getMonthlyTotals(current.year, current.month);
@@ -108,8 +105,29 @@ export async function setStartingBalance(year: number, month: number, amount: nu
       break;
     }
 
-    await upsertStartingBalance(next.year, next.month, ending, true, updatedBy);
+    await upsertStartingBalance(next.year, next.month, ending, isConfirmed, updatedBy);
     current = next;
     currentBalance = ending;
   }
+}
+
+// Manually setting a month's starting balance cascades forward through
+// every later month that's already been materialized. Every month touched
+// by the cascade becomes confirmed, including the edited one -- they're
+// now derived from a real number instead of a blind 0 guess. This never
+// touches the transactions table (no income/expense row, no auto-invest):
+// it's purely the carried-over opening number, not a real transaction.
+export async function setStartingBalance(year: number, month: number, amount: number, updatedBy: number): Promise<void> {
+  await upsertStartingBalance(year, month, amount, true, updatedBy);
+  await cascadeForward({ year, month }, amount, true, updatedBy);
+}
+
+// Deletes a month's stored override and lets it fall back to its natural
+// rollover value (see getBalanceSummary), then cascades that recomputed
+// value -- and whatever isConfirmed it actually came out to -- forward
+// through later months, same as a manual edit would.
+export async function resetStartingBalance(year: number, month: number, updatedBy: number): Promise<void> {
+  await deleteStoredStartingBalance(year, month);
+  const summary = await getBalanceSummary(year, month);
+  await cascadeForward({ year, month }, summary.startingBalance, !summary.needsPrompt, updatedBy);
 }

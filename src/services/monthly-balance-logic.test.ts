@@ -72,7 +72,7 @@ test('cascadeStartingBalance: edits a month that has no later months, nothing el
   const records = new Map<string, MonthRecord>([
     ['2026-11', { startingBalance: 0, income: 500, expenses: 300, isConfirmed: false }],
   ]);
-  const result = cascadeStartingBalance(records, { year: 2026, month: 11 }, 1000);
+  const result = cascadeStartingBalance(records, { year: 2026, month: 11 }, 1000, true);
   assert.deepEqual(result.get('2026-11'), { startingBalance: 1000, income: 500, expenses: 300, isConfirmed: true });
 });
 
@@ -83,7 +83,7 @@ test('cascadeStartingBalance: propagates through every already-materialized late
     ['2026-12', { startingBalance: 800, income: 200, expenses: 900, isConfirmed: false }],
   ]);
 
-  const result = cascadeStartingBalance(records, { year: 2026, month: 10 }, 200);
+  const result = cascadeStartingBalance(records, { year: 2026, month: 10 }, 200, true);
 
   // October: 200 -400 +1000 = 800 (was 600, was computed from 0 -400 +1000)
   assert.deepEqual(result.get('2026-10'), { startingBalance: 200, income: 1000, expenses: 400, isConfirmed: true });
@@ -100,7 +100,7 @@ test('cascadeStartingBalance: stops at the first month with no stored record', (
     ['2026-12', { startingBalance: 800, income: 200, expenses: 900, isConfirmed: false }],
   ]);
 
-  const result = cascadeStartingBalance(records, { year: 2026, month: 10 }, 200);
+  const result = cascadeStartingBalance(records, { year: 2026, month: 10 }, 200, true);
 
   assert.deepEqual(result.get('2026-10'), { startingBalance: 200, income: 1000, expenses: 400, isConfirmed: true });
   // December is untouched -- the gap at November breaks the chain.
@@ -113,8 +113,22 @@ test('cascadeStartingBalance: a cascaded balance can go negative', () => {
     ['2026-11', { startingBalance: 500, income: 0, expenses: 1000, isConfirmed: true }],
   ]);
 
-  const result = cascadeStartingBalance(records, { year: 2026, month: 10 }, -200);
+  const result = cascadeStartingBalance(records, { year: 2026, month: 10 }, -200, true);
 
   assert.deepEqual(result.get('2026-10'), { startingBalance: -200, income: 0, expenses: 0, isConfirmed: true });
   assert.deepEqual(result.get('2026-11'), { startingBalance: -200, income: 0, expenses: 1000, isConfirmed: true });
+});
+
+test('cascadeStartingBalance: a reset can land back on an unconfirmed value and still propagates it', () => {
+  const records = new Map<string, MonthRecord>([
+    ['2026-10', { startingBalance: 1000, income: 0, expenses: 0, isConfirmed: true }],
+    ['2026-11', { startingBalance: 1000, income: 500, expenses: 300, isConfirmed: true }],
+  ]);
+
+  // Resetting October back to its "no prior history" default lands on an
+  // unconfirmed 0, not a manual edit's confirmed value.
+  const result = cascadeStartingBalance(records, { year: 2026, month: 10 }, 0, false);
+
+  assert.deepEqual(result.get('2026-10'), { startingBalance: 0, income: 0, expenses: 0, isConfirmed: false });
+  assert.deepEqual(result.get('2026-11'), { startingBalance: 0, income: 500, expenses: 300, isConfirmed: false });
 });

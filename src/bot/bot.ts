@@ -17,7 +17,7 @@ import { setPendingCategoryGoalInput, takePendingCategoryGoalInput } from './pen
 import { parseCategoryGoalInput } from '../services/category-goal-logic.js';
 import { setPendingBalanceInput, takePendingBalanceInput } from './pending-balance-input.js';
 import { parseStartingBalanceInput } from '../services/balance-input-logic.js';
-import { getBalanceSummary, setStartingBalance } from '../services/monthly-balance.js';
+import { getBalanceSummary, setStartingBalance, resetStartingBalance } from '../services/monthly-balance.js';
 import { uploadReceiptImage, deleteReceiptImage } from '../db/storage.js';
 import { saveReceipt } from '../db/receipts.js';
 import type { Category, TransactionType, TransactionSource } from '../types/db.js';
@@ -175,7 +175,9 @@ bot.command('balance', async (ctx) => {
     lines.push('', 'Начальная сумма ещё не задана (поставил 0) — укажи реальную сумму кнопкой ниже.');
   }
 
-  const keyboard = new InlineKeyboard().text('✏️ Изменить начальную сумму', `balance:edit:${year}:${month}`);
+  const keyboard = new InlineKeyboard()
+    .text('✏️ Изменить начальную сумму', `balance:edit:${year}:${month}`)
+    .text('🗑 Сбросить', `balance:reset:${year}:${month}`);
   await ctx.reply(lines.join('\n'), { reply_markup: keyboard });
 });
 
@@ -792,6 +794,31 @@ bot.on('callback_query:data', async (ctx) => {
     setPendingBalanceInput(ctx.from.id, { year: Number(yearStr), month: Number(monthStr) });
     await ctx.answerCallbackQuery();
     await ctx.reply('Напиши новую начальную сумму числом (например, 614650 или 614 650,50). Отрицательные значения разрешены.');
+    return;
+  }
+
+  if (data.startsWith('balance:reset:')) {
+    const [, , yearStr, monthStr] = data.split(':');
+    const year = Number(yearStr);
+    const month = Number(monthStr);
+
+    let summary;
+    try {
+      await resetStartingBalance(year, month, ctx.from.id);
+      summary = await getBalanceSummary(year, month);
+    } catch (error) {
+      console.error('Failed to reset starting balance:', error);
+      await ctx.answerCallbackQuery({ text: 'Не получилось сбросить.' });
+      return;
+    }
+
+    await ctx.answerCallbackQuery({ text: 'Сброшено' });
+    await ctx.reply(
+      [
+        `✅ Начальная сумма сброшена: ${summary.startingBalance.toFixed(2)} ${env.CURRENCY_SYMBOL}`,
+        `Текущий остаток: ${summary.endingBalance.toFixed(2)} ${env.CURRENCY_SYMBOL}`,
+      ].join('\n'),
+    );
     return;
   }
 

@@ -73,17 +73,22 @@ export interface MonthRecord {
   isConfirmed: boolean;
 }
 
-// When a user manually edits a past month's starting balance, every
-// already-materialized later month must shift by the same amount, in order:
-// month N+1's starting balance is month N's new ending balance, and so on.
-// Stops at the first month that doesn't have a record yet -- there's
-// nothing to cascade into, and we don't want to invent future months here.
-// A manual edit also marks every month it touches as confirmed -- they're
-// now derived from a real number instead of a blind 0 guess.
+// When a month's starting balance changes -- a manual edit, or a reset back
+// to its natural rollover value -- every already-materialized later month
+// must shift by the same amount, in order: month N+1's starting balance is
+// month N's new ending balance, and so on. Stops at the first month that
+// doesn't have a record yet -- there's nothing to cascade into, and we
+// don't want to invent future months here.
+//
+// isConfirmed is the status to stamp on every month the cascade touches. A
+// manual edit passes true (it's now a real number, not a guess); a reset
+// passes whatever the recomputed rollover's own isConfirmed turned out to
+// be, since resetting can land back on an unconfirmed 0.
 export function cascadeStartingBalance(
   records: ReadonlyMap<string, MonthRecord>,
   editedMonth: MonthKey,
   newStartingBalance: number,
+  isConfirmed: boolean,
 ): Map<string, MonthRecord> {
   const result = new Map(records);
 
@@ -97,7 +102,7 @@ export function cascadeStartingBalance(
       break;
     }
 
-    result.set(key, { ...existing, startingBalance: currentBalance, isConfirmed: true });
+    result.set(key, { ...existing, startingBalance: currentBalance, isConfirmed });
 
     const ending = endingBalance(currentBalance, existing.income, existing.expenses);
     const next = nextMonthKey(current);

@@ -40,3 +40,15 @@ export async function upsertStartingBalance(
     throw error;
   }
 }
+
+// Removes a month's stored override entirely, so the next read falls back
+// to the natural rollover from the previous month (or 0/unconfirmed if
+// there's no previous month either) instead of a value someone set by
+// mistake.
+export async function deleteStoredStartingBalance(year: number, month: number): Promise<void> {
+  const { error } = await supabase.from('monthly_balances').delete().eq('year', year).eq('month', month);
+
+  if (error) {
+    throw error;
+  }
+}
