@@ -37,22 +37,32 @@ export function monthDateRangeISO(year: number, month: number): { start: string;
 
 export interface RolloverResult {
   startingBalance: number;
-  needsPrompt: boolean;
+  isConfirmed: boolean;
 }
 
 // What a brand-new month's starting balance should be, given the previous
 // month's stored record (or null if the previous month was never set up at
 // all). A negative previous ending balance carries over as-is.
+//
+// isConfirmed tracks whether a real person has ever actually set this
+// household's starting balance, as opposed to the bot silently defaulting
+// it to 0 -- it's not "does a row exist for this month", since the lazy
+// rollover persists a row the first time *anything* reads this month, long
+// before a human has seen (let alone confirmed) the number. A month rolled
+// over from a confirmed previous month is itself confirmed (it's a real
+// derived value, not a guess); one rolled over from an unconfirmed 0 stays
+// unconfirmed, and that keeps propagating forward until someone sets a
+// real number via setStartingBalance.
 export function resolveRolloverStartingBalance(
-  previousMonth: { startingBalance: number; income: number; expenses: number } | null,
+  previousMonth: { startingBalance: number; income: number; expenses: number; isConfirmed: boolean } | null,
 ): RolloverResult {
   if (!previousMonth) {
-    return { startingBalance: 0, needsPrompt: true };
+    return { startingBalance: 0, isConfirmed: false };
   }
 
   return {
     startingBalance: endingBalance(previousMonth.startingBalance, previousMonth.income, previousMonth.expenses),
-    needsPrompt: false,
+    isConfirmed: previousMonth.isConfirmed,
   };
 }
 
@@ -60,6 +70,7 @@ export interface MonthRecord {
   startingBalance: number;
   income: number;
   expenses: number;
+  isConfirmed: boolean;
 }
 
 // When a user manually edits a past month's starting balance, every
@@ -67,6 +78,8 @@ export interface MonthRecord {
 // month N+1's starting balance is month N's new ending balance, and so on.
 // Stops at the first month that doesn't have a record yet -- there's
 // nothing to cascade into, and we don't want to invent future months here.
+// A manual edit also marks every month it touches as confirmed -- they're
+// now derived from a real number instead of a blind 0 guess.
 export function cascadeStartingBalance(
   records: ReadonlyMap<string, MonthRecord>,
   editedMonth: MonthKey,
@@ -84,7 +97,7 @@ export function cascadeStartingBalance(
       break;
     }
 
-    result.set(key, { ...existing, startingBalance: currentBalance });
+    result.set(key, { ...existing, startingBalance: currentBalance, isConfirmed: true });
 
     const ending = endingBalance(currentBalance, existing.income, existing.expenses);
     const next = nextMonthKey(current);

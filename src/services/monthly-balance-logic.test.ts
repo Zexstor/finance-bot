@@ -49,65 +49,72 @@ test('monthDateRangeISO: December rolls the end boundary into the next year', ()
   });
 });
 
-test('resolveRolloverStartingBalance: no previous month defaults to 0 and asks to be set', () => {
-  assert.deepEqual(resolveRolloverStartingBalance(null), { startingBalance: 0, needsPrompt: true });
+test('resolveRolloverStartingBalance: no previous month defaults to 0 and stays unconfirmed', () => {
+  assert.deepEqual(resolveRolloverStartingBalance(null), { startingBalance: 0, isConfirmed: false });
 });
 
-test('resolveRolloverStartingBalance: carries over the previous month\'s ending balance', () => {
-  const result = resolveRolloverStartingBalance({ startingBalance: 1000, income: 500, expenses: 300 });
-  assert.deepEqual(result, { startingBalance: 1200, needsPrompt: false });
+test("resolveRolloverStartingBalance: carries over a confirmed previous month's ending balance, still confirmed", () => {
+  const result = resolveRolloverStartingBalance({ startingBalance: 1000, income: 500, expenses: 300, isConfirmed: true });
+  assert.deepEqual(result, { startingBalance: 1200, isConfirmed: true });
 });
 
 test('resolveRolloverStartingBalance: a negative ending balance carries over as-is', () => {
-  const result = resolveRolloverStartingBalance({ startingBalance: 100, income: 0, expenses: 500 });
-  assert.deepEqual(result, { startingBalance: -400, needsPrompt: false });
+  const result = resolveRolloverStartingBalance({ startingBalance: 100, income: 0, expenses: 500, isConfirmed: true });
+  assert.deepEqual(result, { startingBalance: -400, isConfirmed: true });
+});
+
+test('resolveRolloverStartingBalance: rolling over an unconfirmed previous month stays unconfirmed', () => {
+  const result = resolveRolloverStartingBalance({ startingBalance: 0, income: 500, expenses: 300, isConfirmed: false });
+  assert.deepEqual(result, { startingBalance: 200, isConfirmed: false });
 });
 
 test('cascadeStartingBalance: edits a month that has no later months, nothing else to shift', () => {
-  const records = new Map<string, MonthRecord>([['2026-11', { startingBalance: 0, income: 500, expenses: 300 }]]);
+  const records = new Map<string, MonthRecord>([
+    ['2026-11', { startingBalance: 0, income: 500, expenses: 300, isConfirmed: false }],
+  ]);
   const result = cascadeStartingBalance(records, { year: 2026, month: 11 }, 1000);
-  assert.deepEqual(result.get('2026-11'), { startingBalance: 1000, income: 500, expenses: 300 });
+  assert.deepEqual(result.get('2026-11'), { startingBalance: 1000, income: 500, expenses: 300, isConfirmed: true });
 });
 
 test('cascadeStartingBalance: propagates through every already-materialized later month', () => {
   const records = new Map<string, MonthRecord>([
-    ['2026-10', { startingBalance: 0, income: 1000, expenses: 400 }],
-    ['2026-11', { startingBalance: 600, income: 500, expenses: 300 }],
-    ['2026-12', { startingBalance: 800, income: 200, expenses: 900 }],
+    ['2026-10', { startingBalance: 0, income: 1000, expenses: 400, isConfirmed: false }],
+    ['2026-11', { startingBalance: 600, income: 500, expenses: 300, isConfirmed: false }],
+    ['2026-12', { startingBalance: 800, income: 200, expenses: 900, isConfirmed: false }],
   ]);
 
   const result = cascadeStartingBalance(records, { year: 2026, month: 10 }, 200);
 
   // October: 200 -400 +1000 = 800 (was 600, was computed from 0 -400 +1000)
-  assert.deepEqual(result.get('2026-10'), { startingBalance: 200, income: 1000, expenses: 400 });
+  assert.deepEqual(result.get('2026-10'), { startingBalance: 200, income: 1000, expenses: 400, isConfirmed: true });
   // November's starting balance becomes October's new ending balance.
-  assert.deepEqual(result.get('2026-11'), { startingBalance: 800, income: 500, expenses: 300 });
+  assert.deepEqual(result.get('2026-11'), { startingBalance: 800, income: 500, expenses: 300, isConfirmed: true });
   // December's starting balance becomes November's new ending balance (800 -300 +500 = 1000).
-  assert.deepEqual(result.get('2026-12'), { startingBalance: 1000, income: 200, expenses: 900 });
+  assert.deepEqual(result.get('2026-12'), { startingBalance: 1000, income: 200, expenses: 900, isConfirmed: true });
 });
 
 test('cascadeStartingBalance: stops at the first month with no stored record', () => {
   const records = new Map<string, MonthRecord>([
-    ['2026-10', { startingBalance: 0, income: 1000, expenses: 400 }],
+    ['2026-10', { startingBalance: 0, income: 1000, expenses: 400, isConfirmed: false }],
     // 2026-11 was never materialized.
-    ['2026-12', { startingBalance: 800, income: 200, expenses: 900 }],
+    ['2026-12', { startingBalance: 800, income: 200, expenses: 900, isConfirmed: false }],
   ]);
 
   const result = cascadeStartingBalance(records, { year: 2026, month: 10 }, 200);
 
-  assert.deepEqual(result.get('2026-10'), { startingBalance: 200, income: 1000, expenses: 400 });
+  assert.deepEqual(result.get('2026-10'), { startingBalance: 200, income: 1000, expenses: 400, isConfirmed: true });
   // December is untouched -- the gap at November breaks the chain.
-  assert.deepEqual(result.get('2026-12'), { startingBalance: 800, income: 200, expenses: 900 });
+  assert.deepEqual(result.get('2026-12'), { startingBalance: 800, income: 200, expenses: 900, isConfirmed: false });
 });
 
 test('cascadeStartingBalance: a cascaded balance can go negative', () => {
   const records = new Map<string, MonthRecord>([
-    ['2026-10', { startingBalance: 500, income: 0, expenses: 0 }],
-    ['2026-11', { startingBalance: 500, income: 0, expenses: 1000 }],
+    ['2026-10', { startingBalance: 500, income: 0, expenses: 0, isConfirmed: true }],
+    ['2026-11', { startingBalance: 500, income: 0, expenses: 1000, isConfirmed: true }],
   ]);
 
   const result = cascadeStartingBalance(records, { year: 2026, month: 10 }, -200);
 
-  assert.deepEqual(result.get('2026-10'), { startingBalance: -200, income: 0, expenses: 0 });
-  assert.deepEqual(result.get('2026-11'), { startingBalance: -200, income: 0, expenses: 1000 });
+  assert.deepEqual(result.get('2026-10'), { startingBalance: -200, income: 0, expenses: 0, isConfirmed: true });
+  assert.deepEqual(result.get('2026-11'), { startingBalance: -200, income: 0, expenses: 1000, isConfirmed: true });
 });

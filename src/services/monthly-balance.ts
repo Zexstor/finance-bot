@@ -49,26 +49,29 @@ export interface BalanceSummary {
 // from the previous month's ending balance if it hasn't been touched yet --
 // this lazy resolution on first read is what makes the "1st of the month"
 // carry-over happen, since there's no separate cron job for it.
+//
+// needsPrompt is read from the stored is_confirmed flag every call, not
+// just computed once at materialization time -- otherwise the first ever
+// read of a new month (even an automated one, like a health check) would
+// permanently silence the "please set your starting balance" nudge before
+// any person had actually seen or confirmed it.
 export async function getBalanceSummary(year: number, month: number): Promise<BalanceSummary> {
-  let startingBalance = await getStoredStartingBalance(year, month);
-  let needsPrompt = false;
+  let stored = await getStoredStartingBalance(year, month);
 
-  if (startingBalance === null) {
+  if (stored === null) {
     const prev = previousMonthKey({ year, month });
     const prevStored = await getStoredStartingBalance(prev.year, prev.month);
 
+    let rollover;
     if (prevStored === null) {
-      const rollover = resolveRolloverStartingBalance(null);
-      startingBalance = rollover.startingBalance;
-      needsPrompt = rollover.needsPrompt;
+      rollover = resolveRolloverStartingBalance(null);
     } else {
       const prevTotals = await getMonthlyTotals(prev.year, prev.month);
-      const rollover = resolveRolloverStartingBalance({ startingBalance: prevStored, ...prevTotals });
-      startingBalance = rollover.startingBalance;
-      needsPrompt = rollover.needsPrompt;
+      rollover = resolveRolloverStartingBalance({ startingBalance: prevStored.startingBalance, ...prevTotals, isConfirmed: prevStored.isConfirmed });
     }
 
-    await upsertStartingBalance(year, month, startingBalance, null);
+    await upsertStartingBalance(year, month, rollover.startingBalance, rollover.isConfirmed, null);
+    stored = { startingBalance: rollover.startingBalance, isConfirmed: rollover.isConfirmed };
   }
 
   const totals = await getMonthlyTotals(year, month);
@@ -76,19 +79,21 @@ export async function getBalanceSummary(year: number, month: number): Promise<Ba
   return {
     year,
     month,
-    startingBalance,
+    startingBalance: stored.startingBalance,
     income: totals.income,
     expenses: totals.expenses,
-    endingBalance: endingBalance(startingBalance, totals.income, totals.expenses),
-    needsPrompt,
+    endingBalance: endingBalance(stored.startingBalance, totals.income, totals.expenses),
+    needsPrompt: !stored.isConfirmed,
   };
 }
 
 // Manually setting a month's starting balance cascades forward through
 // every later month that's already been materialized (see
 // cascadeStartingBalance's doc comment for why it stops at the first gap).
+// Every month touched by the cascade becomes confirmed, including the
+// edited one.
 export async function setStartingBalance(year: number, month: number, amount: number, updatedBy: number): Promise<void> {
-  await upsertStartingBalance(year, month, amount, updatedBy);
+  await upsertStartingBalance(year, month, amount, true, updatedBy);
 
   let current: MonthKey = { year, month };
   let currentBalance = amount;
@@ -103,7 +108,7 @@ export async function setStartingBalance(year: number, month: number, amount: nu
       break;
     }
 
-    await upsertStartingBalance(next.year, next.month, ending, updatedBy);
+    await upsertStartingBalance(next.year, next.month, ending, true, updatedBy);
     current = next;
     currentBalance = ending;
   }
