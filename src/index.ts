@@ -6,6 +6,7 @@ await bot.api.setMyCommands([
   { command: 'start', description: 'Запустить бота' },
   { command: 'list', description: 'Последние 20 операций' },
   { command: 'report', description: 'Отчёт за месяц' },
+  { command: 'balance', description: 'Остаток за месяц' },
   { command: 'setgoal', description: 'Задать цель по доходу' },
   { command: 'undo', description: 'Отменить последнюю операцию' },
   { command: 'categories', description: 'Добавить/удалить категории' },
