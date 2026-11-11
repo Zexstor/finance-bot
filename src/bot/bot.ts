@@ -483,9 +483,12 @@ async function handleTransactionText(ctx: Context, text: string, source: Transac
 
     const icon = result.type === 'income' ? '➕' : '➖';
     const label = result.type === 'income' ? 'Доход' : 'Расход';
-    const balanceSuffix = await getBalanceSuffix();
+    // Auto-invest (if any) must be recorded before the balance is computed,
+    // otherwise "Остаток" shown in this same message doesn't yet reflect the
+    // money the line right below it says was just moved to investments.
     const investSuffix =
       result.type === 'income' ? await autoInvestFromIncome(ctx, result.amount, categories, source, occurredAt) : '';
+    const balanceSuffix = await getBalanceSuffix();
     const confirmText = `${icon} ${label}: ${result.amount.toFixed(2)} € — ${matchedCategory.name} (${result.note || 'без заметки'})${dateSuffix(occurredAt)}${balanceSuffix}${investSuffix}`;
     await ctx.reply(confirmText);
     void notifyOtherUsers(ctx, `👤 ${ctx.from.first_name} записал:\n${confirmText}`);
