@@ -71,3 +71,27 @@ test('formatRecentTransactionsForPrompt: missing category/note fall back to read
   assert.match(text, /без категории/);
   assert.match(text, /без заметки/);
 });
+
+test('formatRecentTransactionsForPrompt: tags the auto-investment row as not "the last" entry', () => {
+  const text = formatRecentTransactionsForPrompt([
+    {
+      id: 2,
+      type: 'expense',
+      amount: 35,
+      categoryName: 'Инвестиции',
+      description: 'Авто-инвестиции (10% от дохода)',
+      created_at: '2026-11-11T13:23:22.000Z',
+    },
+    {
+      id: 1,
+      type: 'income',
+      amount: 350,
+      categoryName: 'Подработки',
+      description: 'паша',
+      created_at: '2026-11-11T13:23:22.000Z',
+    },
+  ]);
+  const [autoLine, incomeLine] = text.split('\n');
+  assert.match(autoLine, /СИСТЕМНАЯ/);
+  assert.doesNotMatch(incomeLine, /СИСТЕМНАЯ/);
+});

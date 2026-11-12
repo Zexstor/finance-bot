@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AUTO_INVEST_NOTE } from '../services/auto-investment-logic.js';
 
 // Pure schema for the "what does this non-transaction message actually want"
 // router, kept separate from the OpenAI-calling module so it's unit-tested
@@ -35,7 +36,8 @@ export function formatRecentTransactionsForPrompt(items: RecentTransactionForPro
       const typeLabel = t.type === 'income' ? 'доход' : 'расход';
       const category = t.categoryName ?? 'без категории';
       const note = t.description || 'без заметки';
-      return `id=${t.id} | ${date} | ${typeLabel} | ${t.amount.toFixed(2)} € | ${category} | ${note}`;
+      const autoTag = t.description === AUTO_INVEST_NOTE ? ' | [СИСТЕМНАЯ, не "последняя" для пользователя]' : '';
+      return `id=${t.id} | ${date} | ${typeLabel} | ${t.amount.toFixed(2)} € | ${category} | ${note}${autoTag}`;
     })
     .join('\n');
 }
