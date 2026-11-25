@@ -166,3 +166,16 @@ export function autoInvestReminder(
     `теперь 10% = ${after} €. Если нужно — поправь запись «Авто-инвестиции» в /list.`
   );
 }
+
+// Deleting an income leaves its auto-investment behind (how the orphaned
+// 6 EUR entry from a misclassified "подарки 60" income came about).
+export function autoInvestDeleteReminder(type: TransactionType, amount: number): string | null {
+  if (type !== 'income') {
+    return null;
+  }
+  const share = calculateAutoInvestment(amount).toFixed(2);
+  return (
+    `ℹ️ Авто-инвестиция с этого дохода (${share} €) осталась — она не удаляется сама. ` +
+    'Если она больше не нужна, удали её: напиши, например, «удали последнюю авто-инвестицию».'
+  );
+}

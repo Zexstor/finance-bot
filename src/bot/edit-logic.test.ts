@@ -8,6 +8,7 @@ import {
   formatEditButtonLabel,
   formatTransactionCard,
   autoInvestReminder,
+  autoInvestDeleteReminder,
   MAX_DESCRIPTION_LENGTH,
   type EditableTransaction,
 } from './edit-logic.js';
@@ -146,4 +147,10 @@ test('pending-edit-input: take returns the entry once; clear drops it', () => {
   setPendingEditInput(910002, { transactionId: 8, field: 'description' });
   clearPendingEditInput(910002);
   assert.equal(takePendingEditInput(910002), null);
+});
+
+test('autoInvestDeleteReminder: only when an income is deleted, with its 10% share', () => {
+  assert.equal(autoInvestDeleteReminder('expense', 60), null);
+  const text = autoInvestDeleteReminder('income', 60);
+  assert.ok(text?.includes('(6.00 €)'), text ?? '');
 });

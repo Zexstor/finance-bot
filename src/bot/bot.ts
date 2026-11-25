@@ -46,6 +46,7 @@ import {
 import { monthKey, dateStringToInstant, APP_TIME_ZONE } from '../integrations/month-key.js';
 import { locateRemovedRow } from '../integrations/sheet-row.js';
 import { registerTransactionEditor } from './transaction-editor.js';
+import { autoInvestReminder, autoInvestDeleteReminder } from './edit-logic.js';
 import { calculateAutoInvestment, AUTO_INVEST_CATEGORY_NAME, AUTO_INVEST_NOTE } from '../services/auto-investment-logic.js';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
@@ -831,6 +832,18 @@ bot.on('callback_query:data', async (ctx) => {
     const agentConfirmText = `${label}:\n${action.summary}`;
     await ctx.editMessageText(agentConfirmText);
     void notifyOtherUsers(ctx, `👤 ${ctx.from.first_name}:\n${agentConfirmText}`);
+
+    // Same reminder as the /list editor: an income's auto-investment entry is
+    // never adjusted automatically (no stored link between the two).
+    const reminder =
+      action.kind === 'delete'
+        ? autoInvestDeleteReminder(action.original.type, action.original.amount)
+        : action.patch?.amount !== undefined
+          ? autoInvestReminder(action.original.type, action.original.amount, action.patch.amount)
+          : null;
+    if (reminder) {
+      await ctx.reply(reminder);
+    }
     return;
   }
 
