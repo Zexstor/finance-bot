@@ -4,10 +4,15 @@ import {
   listRecentTransactions,
   getTransactionById,
   updateTransaction,
+  deleteTransactionById,
   type TransactionListItem,
   type TransactionUpdate,
 } from '../services/transactions.js';
-import { updateTransactionInSheet, type SheetRowEdits } from '../integrations/google-sheets.js';
+import {
+  updateTransactionInSheet,
+  deleteTransactionFromSheet,
+  type SheetRowEdits,
+} from '../integrations/google-sheets.js';
 import { monthKey } from '../integrations/month-key.js';
 import {
   EDIT_CALLBACK_PREFIX,
@@ -18,6 +23,7 @@ import {
   formatEditButtonLabel,
   formatTransactionCard,
   autoInvestReminder,
+  autoInvestDeleteReminder,
   MAX_DESCRIPTION_LENGTH,
 } from './edit-logic.js';
 import {
@@ -60,7 +66,11 @@ async function showOrEdit(
   await ctx.reply(text, { reply_markup: keyboard });
 }
 
-export async function showTransactionList(ctx: Context, edit = false): Promise<void> {
+export async function showTransactionList(
+  ctx: Context,
+  edit = false,
+  header?: string,
+): Promise<void> {
   let transactions: TransactionListItem[];
   try {
     transactions = await listRecentTransactions(LIST_SIZE);
@@ -81,7 +91,8 @@ export async function showTransactionList(ctx: Context, edit = false): Promise<v
   }
   keyboard.text('❌ Закрыть', editCallback.close());
 
-  await showOrEdit(ctx, 'Последние записи — нажми, чтобы изменить:', keyboard, edit);
+  const title = 'Последние записи — нажми, чтобы изменить или удалить:';
+  await showOrEdit(ctx, header ? `${header}\n\n${title}` : title, keyboard, edit);
 }
 
 function cardKeyboard(id: number): InlineKeyboard {
@@ -90,6 +101,7 @@ function cardKeyboard(id: number): InlineKeyboard {
     .text('✏️ Описание', editCallback.field(id, 'description'))
     .text('💶 Сумма', editCallback.field(id, 'amount'))
     .row()
+    .text('🗑 Удалить', editCallback.askDelete(id))
     .text('↩️ К списку', editCallback.list())
     .text('❌ Закрыть', editCallback.close());
 }
@@ -200,6 +212,43 @@ export function registerTransactionEditor(bot: Bot, deps: EditorDeps): void {
 
     if (action.kind === 'open') {
       await showCard(ctx, t, true);
+      return;
+    }
+
+    if (action.kind === 'askDelete') {
+      const keyboard = new InlineKeyboard()
+        .text('✅ Да, удалить', editCallback.confirmDelete(t.id))
+        .text('↩️ Нет', editCallback.open(t.id));
+      await showOrEdit(ctx, `Удалить эту запись?\n\n${formatTransactionCard(t)}`, keyboard, true);
+      return;
+    }
+
+    if (action.kind === 'confirmDelete') {
+      // DB first (source of truth), then the Sheet row by its values, then
+      // the other user -- same order as an AI-agent delete.
+      try {
+        await deleteTransactionById(t.id);
+      } catch (error) {
+        console.error('Failed to delete transaction:', error);
+        await ctx.reply('Не получилось удалить, попробуй ещё раз.');
+        return;
+      }
+
+      await deleteTransactionFromSheet({
+        month: monthKey(new Date(t.created_at)),
+        type: t.type,
+        amount: t.amount,
+        description: t.description ?? '',
+      });
+
+      const line = formatEditButtonLabel(t);
+      void deps.notifyOtherUsers(ctx, `👤 ${ctx.from.first_name}:\n🗑 Удалено: ${line}`);
+
+      await showTransactionList(ctx, true, `🗑 Удалено: ${line}`);
+      const reminder = autoInvestDeleteReminder(t.type, t.amount);
+      if (reminder) {
+        await ctx.reply(reminder);
+      }
       return;
     }
 

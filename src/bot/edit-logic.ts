@@ -13,6 +13,8 @@ export type EditCallback =
   | { kind: 'open'; id: number }
   | { kind: 'field'; id: number; field: EditField }
   | { kind: 'setCategory'; id: number; categoryId: number | null }
+  | { kind: 'askDelete'; id: number }
+  | { kind: 'confirmDelete'; id: number }
   | { kind: 'close' };
 
 // Short codes keep callback data well under Telegram's 64-byte limit.
@@ -26,6 +28,9 @@ export const editCallback = {
   open: (id: number): string => `ed:o:${id}`,
   field: (id: number, field: EditField): string => `ed:f:${id}:${FIELD_TO_CODE[field]}`,
   setCategory: (id: number, categoryId: number | null): string => `ed:c:${id}:${categoryId ?? 'n'}`,
+  // Two steps on purpose: the first only asks, so a stray tap never deletes.
+  askDelete: (id: number): string => `ed:d:${id}`,
+  confirmDelete: (id: number): string => `ed:D:${id}`,
   close: (): string => 'ed:x',
 };
 
@@ -49,6 +54,14 @@ export function parseEditCallback(data: string): EditCallback | null {
     case 'o': {
       const id = parseId(parts[2]);
       return id !== null && parts.length === 3 ? { kind: 'open', id } : null;
+    }
+    case 'd': {
+      const id = parseId(parts[2]);
+      return id !== null && parts.length === 3 ? { kind: 'askDelete', id } : null;
+    }
+    case 'D': {
+      const id = parseId(parts[2]);
+      return id !== null && parts.length === 3 ? { kind: 'confirmDelete', id } : null;
     }
     case 'f': {
       const id = parseId(parts[2]);

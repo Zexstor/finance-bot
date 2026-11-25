@@ -154,3 +154,15 @@ test('autoInvestDeleteReminder: only when an income is deleted, with its 10% sha
   const text = autoInvestDeleteReminder('income', 60);
   assert.ok(text?.includes('(6.00 €)'), text ?? '');
 });
+
+test('callbacks: delete is two steps that round-trip and reject junk', () => {
+  assert.deepEqual(parseEditCallback(editCallback.askDelete(272)), { kind: 'askDelete', id: 272 });
+  assert.deepEqual(parseEditCallback(editCallback.confirmDelete(272)), {
+    kind: 'confirmDelete',
+    id: 272,
+  });
+  assert.notEqual(editCallback.askDelete(272), editCallback.confirmDelete(272));
+  for (const data of ['ed:d:', 'ed:d:0', 'ed:D:abc', 'ed:D:1:2']) {
+    assert.equal(parseEditCallback(data), null, data);
+  }
+});
