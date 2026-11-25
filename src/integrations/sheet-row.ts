@@ -1,5 +1,5 @@
 import type { TransactionType } from '../types/db.js';
-import { APP_TIME_ZONE } from './month-key.js';
+import { APP_TIME_ZONE, monthKey } from './month-key.js';
 
 // Pure logic for writing into the user's existing Google Sheets budget
 // template (the "Транзакции" tab: two side-by-side blocks sharing one
@@ -59,5 +59,32 @@ export function buildTemplateRowValues(row: TemplateRowInput): TemplateRowValues
     amount: row.amount,
     description: row.note || '',
     category: row.categoryName ?? 'Без категории',
+  };
+}
+
+export interface RemovedRowInput {
+  type: TransactionType;
+  amount: number;
+  description: string | null;
+  createdAt: string;
+}
+
+export interface SheetRowLocator {
+  month: string;
+  type: TransactionType;
+  amount: number;
+  description: string;
+}
+
+// Where an undone transaction's row lives: the month comes from its
+// created_at in the app time zone -- the same rule used when the row was
+// written -- so an entry logged just after local midnight is looked up in
+// the right month's spreadsheet.
+export function locateRemovedRow(removed: RemovedRowInput): SheetRowLocator {
+  return {
+    month: monthKey(new Date(removed.createdAt)),
+    type: removed.type,
+    amount: removed.amount,
+    description: removed.description ?? '',
   };
 }

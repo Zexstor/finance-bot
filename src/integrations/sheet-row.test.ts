@@ -1,6 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { columnsFor, toSheetsSerial, buildTemplateRowValues, EXPENSE_COLUMNS, INCOME_COLUMNS } from './sheet-row.js';
+import {
+  columnsFor,
+  toSheetsSerial,
+  buildTemplateRowValues,
+  locateRemovedRow,
+  EXPENSE_COLUMNS,
+  INCOME_COLUMNS,
+} from './sheet-row.js';
 
 test('columnsFor: expense uses the left-hand block', () => {
   assert.deepEqual(columnsFor('expense'), EXPENSE_COLUMNS);
@@ -52,4 +59,20 @@ test('buildTemplateRowValues: passes amount and category through unchanged', () 
   assert.equal(values.amount, 1500);
   assert.equal(values.category, 'Зарплата');
   assert.equal(values.description, 'зарплата');
+});
+
+test('locateRemovedRow: undone row is looked up in its own month and block', () => {
+  assert.deepEqual(
+    locateRemovedRow({ type: 'expense', amount: 6, description: 'Мега продукты', createdAt: '2026-11-20T20:07:00Z' }),
+    { month: '2026-11', type: 'expense', amount: 6, description: 'Мега продукты' },
+  );
+});
+
+test('locateRemovedRow: just after local midnight belongs to the new month', () => {
+  // 23:30 UTC on Oct 31 is 00:30 on Nov 1 in Podgorica.
+  assert.equal(locateRemovedRow({ type: 'expense', amount: 1, description: 'x', createdAt: '2026-10-31T23:30:00Z' }).month, '2026-11');
+});
+
+test('locateRemovedRow: a missing note matches an empty description cell', () => {
+  assert.equal(locateRemovedRow({ type: 'income', amount: 50, description: null, createdAt: '2026-11-17T14:09:00Z' }).description, '');
 });

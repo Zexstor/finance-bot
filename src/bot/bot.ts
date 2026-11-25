@@ -44,6 +44,7 @@ import {
   type RowWithDate,
 } from '../integrations/google-sheets.js';
 import { monthKey, dateStringToInstant, APP_TIME_ZONE } from '../integrations/month-key.js';
+import { locateRemovedRow } from '../integrations/sheet-row.js';
 import { calculateAutoInvestment, AUTO_INVEST_CATEGORY_NAME, AUTO_INVEST_NOTE } from '../services/auto-investment-logic.js';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
@@ -191,6 +192,11 @@ bot.command('undo', async (ctx) => {
     await ctx.reply('Пока нечего отменять.');
     return;
   }
+
+  // Same best-effort Sheet cleanup as an agent delete: without it the undone
+  // row stayed in the Google Sheet and the Sheet's totals drifted from the
+  // bot's. If the row can't be uniquely located this only logs.
+  await deleteTransactionFromSheet(locateRemovedRow(removed));
 
   const icon = removed.type === 'income' ? '➕' : '➖';
   const label = removed.type === 'income' ? 'доход' : 'расход';

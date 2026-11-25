@@ -37,6 +37,7 @@ export interface RemovedTransaction {
   type: TransactionType;
   amount: number;
   description: string | null;
+  createdAt: string; // decides which month's Google Sheet held the row
   authorName: string;
 }
 
@@ -51,6 +52,7 @@ export async function deleteLastTransaction(): Promise<RemovedTransaction | null
       type: TransactionType;
       amount: number;
       description: string | null;
+      created_at: string;
     }>();
 
   if (error) {
@@ -67,6 +69,7 @@ export async function deleteLastTransaction(): Promise<RemovedTransaction | null
     type: data.type,
     amount: Number(data.amount),
     description: data.description,
+    createdAt: data.created_at,
     authorName: author?.name ?? 'Неизвестно',
   };
 }
