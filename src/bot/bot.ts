@@ -45,6 +45,7 @@ import {
 } from '../integrations/google-sheets.js';
 import { monthKey, dateStringToInstant, APP_TIME_ZONE } from '../integrations/month-key.js';
 import { locateRemovedRow } from '../integrations/sheet-row.js';
+import { registerTransactionEditor } from './transaction-editor.js';
 import { calculateAutoInvestment, AUTO_INVEST_CATEGORY_NAME, AUTO_INVEST_NOTE } from '../services/auto-investment-logic.js';
 
 export const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
@@ -83,28 +84,12 @@ function dateSuffix(occurredAt?: Date): string {
 
 bot.use(accessControl);
 
+// /list editor (registered before the generic text and callback handlers so
+// its typed-reply step and its buttons are seen first).
+registerTransactionEditor(bot, { notifyOtherUsers });
+
 bot.command('start', async (ctx) => {
   await ctx.reply('Привет! Бот учёта финансов запущен.');
-});
-
-bot.command('list', async (ctx) => {
-  let transactions: TransactionListItem[];
-
-  try {
-    transactions = await listRecentTransactions(20);
-  } catch (error) {
-    console.error('Failed to list transactions:', error);
-    await ctx.reply('Не получилось получить список, попробуй ещё раз.');
-    return;
-  }
-
-  if (transactions.length === 0) {
-    await ctx.reply('Пока нет записей.');
-    return;
-  }
-
-  const lines = transactions.map(formatTransactionLine);
-  await replyText(ctx, ['Последние записи:', ...lines].join('\n'));
 });
 
 bot.command('report', async (ctx) => {
@@ -1124,12 +1109,4 @@ async function autoInvestFromIncome(
   });
 
   return `\n💰 Автоматически отложено на инвестиции: ${investAmount.toFixed(2)} €`;
-}
-
-function formatTransactionLine(t: TransactionListItem): string {
-  const date = new Date(t.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-  const icon = t.type === 'income' ? '➕' : '➖';
-  const amount = t.amount.toFixed(2);
-  const label = t.categoryName ?? (t.description || '—');
-  return `${date} ${icon} ${amount} € — ${label} (${t.authorName})`;
 }

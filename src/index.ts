@@ -4,7 +4,7 @@ import { startWeeklyReportJob } from './jobs/weekly-report.js';
 
 await bot.api.setMyCommands([
   { command: 'start', description: 'Запустить бота' },
-  { command: 'list', description: 'Последние 20 операций' },
+  { command: 'list', description: 'Последние 20 операций — посмотреть и изменить' },
   { command: 'report', description: 'Отчёт за месяц' },
   { command: 'setgoal', description: 'Задать цель по доходу' },
   { command: 'undo', description: 'Отменить последнюю операцию' },

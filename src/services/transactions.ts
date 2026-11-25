@@ -117,6 +117,40 @@ export async function listRecentTransactions(limit: number): Promise<Transaction
   }));
 }
 
+export async function getTransactionById(id: number): Promise<TransactionListItem | null> {
+  const { data, error } = await supabase
+    .from('transactions')
+    .select('id, type, amount, description, created_at, author:users(name), category:categories(name)')
+    .eq('id', id)
+    .maybeSingle<{
+      id: number;
+      type: TransactionType;
+      amount: number;
+      description: string | null;
+      created_at: string;
+      author: EmbeddedName | null;
+      category: EmbeddedName | null;
+    }>();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data) {
+    return null;
+  }
+
+  return {
+    id: data.id,
+    type: data.type,
+    amount: Number(data.amount),
+    description: data.description,
+    created_at: data.created_at,
+    authorName: data.author?.name ?? 'Неизвестно',
+    categoryName: data.category?.name ?? null,
+  };
+}
+
 export interface TransactionUpdate {
   categoryId?: number | null;
   amount?: number;
