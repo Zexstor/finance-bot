@@ -88,3 +88,26 @@ export function locateRemovedRow(removed: RemovedRowInput): SheetRowLocator {
     description: removed.description ?? '',
   };
 }
+
+// Where new rows go in a column block: right after the LAST used row, not
+// into the first gap. Deletes (/undo, the /list editor, the AI agent) leave
+// blank rows mid-block; filling the first gap put a new entry in the middle
+// of older dates where nobody looks for it, and a multi-row batch (receipt,
+// several operations in one message) written from a one-row gap would
+// overwrite the filled rows right below it. Returns null if `count` rows
+// don't fit before `maxRow`.
+export function findAppendRow(
+  isRowUsed: (row: number) => boolean,
+  firstRow: number,
+  maxRow: number,
+  count = 1,
+): number | null {
+  let start = firstRow;
+  for (let r = maxRow - 1; r >= firstRow; r--) {
+    if (isRowUsed(r)) {
+      start = r + 1;
+      break;
+    }
+  }
+  return start + count <= maxRow ? start : null;
+}

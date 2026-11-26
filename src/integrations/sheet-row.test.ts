@@ -5,6 +5,7 @@ import {
   toSheetsSerial,
   buildTemplateRowValues,
   locateRemovedRow,
+  findAppendRow,
   EXPENSE_COLUMNS,
   INCOME_COLUMNS,
 } from './sheet-row.js';
@@ -75,4 +76,23 @@ test('locateRemovedRow: just after local midnight belongs to the new month', () 
 
 test('locateRemovedRow: a missing note matches an empty description cell', () => {
   assert.equal(locateRemovedRow({ type: 'income', amount: 50, description: null, createdAt: '2026-11-17T14:09:00Z' }).description, '');
+});
+
+test('findAppendRow: empty block starts at the first data row', () => {
+  assert.equal(findAppendRow(() => false, 4, 999), 4);
+});
+
+test('findAppendRow: goes after the last used row, not into a gap', () => {
+  const used = new Set([4, 5, 7, 8]); // row 6 is a gap left by a delete
+  assert.equal(findAppendRow((r) => used.has(r), 4, 999), 9);
+});
+
+test('findAppendRow: a batch never lands on top of used rows', () => {
+  const used = new Set([4, 6]); // a one-row gap at 5
+  assert.equal(findAppendRow((r) => used.has(r), 4, 999, 3), 7);
+});
+
+test('findAppendRow: returns null when the batch does not fit', () => {
+  assert.equal(findAppendRow((r) => r === 997, 4, 999, 2), null);
+  assert.equal(findAppendRow((r) => r === 997, 4, 999, 1), 998);
 });

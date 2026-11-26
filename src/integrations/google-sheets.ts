@@ -7,6 +7,7 @@ import {
   columnsFor,
   toSheetsSerial,
   buildTemplateRowValues,
+  findAppendRow,
   type TemplateRowInput,
   type TemplateColumns,
 } from './sheet-row.js';
@@ -80,11 +81,16 @@ function isCellEmpty(sheet: GoogleSpreadsheetWorksheet, row: number, col: number
   return value === null || value === '';
 }
 
-// A row counts as free only if ALL four of its cells are empty. The user's
-// real template already has at least one row with data in amount/description
-// but no date (manually entered, date left blank) -- checking the date
-// column alone would have targeted that row and overwritten their entry.
-async function findFirstEmptyRow(sheet: GoogleSpreadsheetWorksheet, cols: TemplateColumns): Promise<number> {
+// A row counts as used if ANY of its four cells has data. The user's real
+// template already has at least one row with data in amount/description but
+// no date (manually entered, date left blank) -- checking the date column
+// alone would have treated that row as free and overwritten their entry.
+// New rows go after the last used row (see findAppendRow), never into a gap.
+async function findAppendStartRow(
+  sheet: GoogleSpreadsheetWorksheet,
+  cols: TemplateColumns,
+  count: number,
+): Promise<number> {
   await sheet.loadCells({
     startRowIndex: FIRST_DATA_ROW,
     endRowIndex: MAX_ROW,
@@ -92,18 +98,14 @@ async function findFirstEmptyRow(sheet: GoogleSpreadsheetWorksheet, cols: Templa
     endColumnIndex: cols.category + 1,
   });
 
-  for (let r = FIRST_DATA_ROW; r < MAX_ROW; r++) {
-    if (
-      isCellEmpty(sheet, r, cols.date) &&
-      isCellEmpty(sheet, r, cols.amount) &&
-      isCellEmpty(sheet, r, cols.description) &&
-      isCellEmpty(sheet, r, cols.category)
-    ) {
-      return r;
-    }
-  }
+  const isRowUsed = (r: number): boolean =>
+    [cols.date, cols.amount, cols.description, cols.category].some((c) => !isCellEmpty(sheet, r, c));
 
-  throw new Error('No empty row found in the budget template (sheet is full)');
+  const start = findAppendRow(isRowUsed, FIRST_DATA_ROW, MAX_ROW, count);
+  if (start === null) {
+    throw new Error('No room left after the last row in the budget template (sheet is full)');
+  }
+  return start;
 }
 
 export type RowWithDate = TemplateRowInput & { createdAt: string };
@@ -162,7 +164,7 @@ export async function appendTransactionRows(rows: RowWithDate[]): Promise<void> 
 
       for (const [, group] of byType) {
         const cols = columnsFor(group[0].type);
-        const startRow = await findFirstEmptyRow(sheet, cols);
+        const startRow = await findAppendStartRow(sheet, cols, group.length);
         group.forEach((row, i) => writeRowCells(sheet, startRow + i, cols, row));
       }
 
